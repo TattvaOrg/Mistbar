@@ -107,6 +107,8 @@ private:
 class Surface {
 public:
     using DrawFn    = std::function<void(cairo_t* cr, int width, int height)>;
+    using EglDrawFn = std::function<bool(wl_surface* surf, int width, int height, int scale)>;
+    using ResizeFn  = std::function<void(wl_surface* surf, int width, int height, int scale)>;
     using PointerFn = std::function<void(const PointerEvent& ev)>;
     using KeyFn     = std::function<void(const KeyEvent& ev)>;
     using CloseFn   = std::function<void()>;
@@ -118,6 +120,8 @@ public:
     Surface& operator=(const Surface&) = delete;
 
     void set_draw_callback(DrawFn fn) { on_draw_ = std::move(fn); }
+    void set_egl_draw_callback(EglDrawFn fn) { on_egl_draw_ = std::move(fn); }
+    void set_resize_callback(ResizeFn fn) { on_resize_ = std::move(fn); }
     void set_pointer_callback(PointerFn fn) { on_pointer_ = std::move(fn); }
     void set_key_callback(KeyFn fn) { on_key_ = std::move(fn); }
     void set_close_callback(CloseFn fn) { on_close_ = std::move(fn); }
@@ -128,6 +132,7 @@ public:
     wl_surface* wl_handle() const noexcept { return wl_surface_; }
     int width() const noexcept { return width_; }
     int height() const noexcept { return height_; }
+    int scale() const noexcept { return scale_; }
     bool is_configured() const noexcept { return configured_; }
     bool is_visible() const noexcept { return visible_; }
     void set_visible(bool v) noexcept { visible_ = v; }
@@ -143,15 +148,20 @@ protected:
     int height_ = 0;
     int scale_ = 1;
     bool configured_ = false;
+    bool awaiting_configure_ = false;
     bool visible_ = true;
     bool redraw_pending_ = false;
     bool frame_pending_ = false;
+    wl_callback* frame_cb_ = nullptr;
 
     DrawFn on_draw_;
+    EglDrawFn on_egl_draw_;
+    ResizeFn on_resize_;
     PointerFn on_pointer_;
     KeyFn on_key_;
     CloseFn on_close_;
 
+    void cancel_frame_callback();
     void schedule_frame_callback();
     static void on_frame_done(void* data, wl_callback* cb, std::uint32_t time);
     static void on_surface_enter(void* data, wl_surface* surf, wl_output* output);
@@ -181,8 +191,14 @@ public:
                 int height,
                 int exclusive_zone = 0,
                 KeyboardMode kb_mode = KeyboardMode::None,
-                wl_output* output = nullptr);
+                wl_output* output = nullptr,
+                int margin_top = 0,
+                int margin_right = 0,
+                int margin_bottom = 0,
+                int margin_left = 0);
 
+    bool is_created() const noexcept { return layer_surface_ != nullptr; }
+    void set_geometry(int width, int height, int top, int right, int bottom, int left, int exclusive_zone);
     void set_margin(int top, int right, int bottom, int left);
     void set_exclusive_zone(int zone);
     void set_size(int width, int height);

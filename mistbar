@@ -69,14 +69,15 @@ print_help() {
     echo -e "    ${GREEN}stop${NC}                     Stop the top bar daemon"
     echo -e "    ${GREEN}restart${NC}                  Restart the top bar daemon"
     echo -e "    ${GREEN}status${NC}                   Show daemon and shader status"
-    echo -e "    ${GREEN}tuner${NC}                    Open the live Liquid Glass Shader Tuner"
+    echo -e "    ${GREEN}tuner${NC}                    Open the live Liquid Glass Shader Lab"
+    echo -e "    ${GREEN}cc${NC}                       Toggle the Liquid Glass Control Center"
     echo -e "    ${GREEN}spotlight${NC}                Open the Liquid Glass Spotlight search pill"
     echo -e "    ${GREEN}toggle${NC}                   Toggle intelligent auto-hide"
     echo -e "    ${GREEN}show${NC}                     Show bar (always visible)"
     echo -e "    ${GREEN}hide${NC}                     Hide bar completely"
     echo -e "    ${GREEN}auto-hide <on|off|toggle>${NC} Configure intelligent auto-hide"
     echo -e "    ${GREEN}theme <dark|light>${NC}       Switch theme"
-    echo -e "    ${GREEN}preset <regular|frosted|dark|clear|solid>${NC} Switch Liquid Glass preset"
+    echo -e "    ${GREEN}preset <clear|frosted|smoked|aqua|solid>${NC} Switch Liquid Glass preset"
     echo -e "    ${GREEN}look <attached|pill>${NC}     Switch bar geometry"
     echo -e "    ${GREEN}config${NC}                   Print or edit config.json"
     echo -e "    ${GREEN}build${NC}                    Build Mistbar with CMake"
@@ -248,6 +249,9 @@ case "${1:-}" in
         ;;
     tuner)
         cmd_ipc_or_fail "tuner"
+        ;;
+    cc|control-center)
+        cmd_ipc_or_fail "cc"
         ;;
     spotlight)
         cmd_ipc_or_fail "spotlight"

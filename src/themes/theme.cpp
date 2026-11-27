@@ -32,7 +32,7 @@ Color Color::from_hex(const std::string& hex, double alpha_override) {
 }
 
 std::vector<std::string> available_presets() {
-    return {"regular", "frosted", "dark", "clear", "solid"};
+    return {"clear", "frosted", "smoked", "aqua", "regular", "dark", "solid"};
 }
 
 ThemePalette resolve_palette(const config::MistbarConfig& cfg) {
@@ -62,12 +62,17 @@ ThemePalette resolve_palette(const config::MistbarConfig& cfg) {
 
     if (p.dark_mode) {
         // Pure black-only / obsidian surfaces for Settings window, airy translucent Liquid Glass for bar & applets
-        p.glass_tint        = {0.10, 0.13, 0.19, p.solid_mode ? 1.0 : tint_a * 0.72};
+        const bool is_aqua = (cfg.glass_preset == "aqua");
+        const bool is_smoked = (cfg.glass_preset == "smoked" || cfg.glass_preset == "dark");
+        const Color tint_base = is_aqua
+            ? Color{0.20, 0.56, 0.96, 1.0}
+            : (is_smoked ? Color{0.09, 0.12, 0.18, 1.0} : Color{0.92, 0.96, 1.00, 1.0});
+        p.glass_tint        = {tint_base.r, tint_base.g, tint_base.b, p.solid_mode ? 1.0 : tint_a * 0.72};
         p.panel_bg          = p.solid_mode
                                   ? Color{0.04, 0.04, 0.05, 0.96}
                                   : (p.clear_mode
-                                         ? Color{0.08, 0.10, 0.15, std::clamp(tint_a * 0.35, 0.03, 0.16)}
-                                         : Color{0.08, 0.10, 0.15, std::clamp(tint_a * 0.65 + 0.08, 0.08, 0.34)});
+                                         ? Color{0.92, 0.96, 1.00, std::clamp(tint_a, 0.03, 0.14)}
+                                         : Color{tint_base.r, tint_base.g, tint_base.b, std::clamp(tint_a, 0.06, 0.42)});
         p.surface_bg        = {0.00, 0.00, 0.00, 0.99};
         p.surface_elevated  = {0.075, 0.075, 0.085, 0.99};
         p.sidebar_bg        = {0.055, 0.055, 0.065, 0.98};

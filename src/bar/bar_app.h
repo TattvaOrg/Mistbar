@@ -7,13 +7,14 @@
 #include "common/svg_loader.h"
 #include "common/sysinfo.h"
 #include "common/wayland_client.h"
+#include "glass/blur/mizzle_renderer.h"
 #include "glass/translucent/glass_panel.h"
 #include "themes/theme.h"
 
 #include <cairo.h>
 #include <chrono>
 #include <condition_variable>
-#include <functional>
+#include <cstdint>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -101,6 +102,7 @@ private:
     config::MistbarConfig cfg_;
     themes::ThemePalette palette_;
     glass::GlassBackdrop backdrop_;
+    glass::MizzleRenderer mizzle_;
     icons::IconCache icons_;
 
     std::unique_ptr<wl::LayerSurface> bar_surface_;
@@ -121,8 +123,24 @@ private:
     std::string hovered_bar_id_;
     std::string hovered_pop_id_;
     std::chrono::steady_clock::time_point last_reactive_draw_{};
+    std::chrono::steady_clock::time_point start_time_{std::chrono::steady_clock::now()};
+    std::chrono::steady_clock::time_point last_capture_{};
 
-    // Cached glass surfaces to avoid GPU glReadPixels on every hover/slider/clock redraw
+    // Click pulse state for mizzle glass click ripple
+    glass::ClickPulse bar_click_{};
+    std::chrono::steady_clock::time_point bar_click_start_{};
+    glass::ClickPulse pop_click_{};
+    std::chrono::steady_clock::time_point pop_click_start_{};
+
+    // Offscreen Cairo UI overlay surfaces uploaded to MizzleRenderer
+    cairo_surface_t* bar_ui_surf_ = nullptr;
+    int bar_ui_w_ = 0;
+    int bar_ui_h_ = 0;
+    cairo_surface_t* pop_ui_surf_ = nullptr;
+    int pop_ui_w_ = 0;
+    int pop_ui_h_ = 0;
+
+    // Fallback cached glass surfaces (used only when hardware EGL is unavailable)
     cairo_surface_t* bar_glass_cache_ = nullptr;
     int bar_cache_w_ = 0;
     int bar_cache_h_ = 0;
@@ -139,12 +157,20 @@ private:
     PopoverKind open_popover_ = PopoverKind::None;
     std::string active_menu_name_;
     double popover_anchor_x_ = 0.0;
-    int popover_w_ = 240;
-    int popover_h_ = 200;
+    int popover_top_m_ = 32;
+    int popover_left_m_ = 0;
+    int popover_w_ = 248;
+    int popover_h_ = 408;
     bool dragging_brightness_ = false;
     bool dragging_volume_ = false;
     int dragging_tuner_idx_ = -1;
     std::chrono::steady_clock::time_point last_hw_cmd_{};
+
+    enum class PendingPopOp { None, Open, Close, RecaptureAndOpenTuner };
+    PendingPopOp pending_pop_op_ = PendingPopOp::None;
+    PopoverKind pending_pop_kind_ = PopoverKind::None;
+    double pending_pop_anchor_x_ = 0.0;
+    std::string pending_pop_menu_name_;
 
     // Background worker for non-blocking subprocess polling
     struct HwSnapshot {
@@ -175,6 +201,8 @@ private:
     void start_worker();
     void stop_worker();
     void invalidate_glass_caches();
+    void destroy_ui_overlays();
+    void capture_live_backdrop(bool force = false);
 
     // Spotlight state
     std::string spotlight_query_;
@@ -201,16 +229,29 @@ private:
 
     void apply_geometry();
     void update_visibility();
+    bool ensure_popover_surface();
     void close_popover();
     void open_popover(PopoverKind kind, double anchor_x, const std::string& menu_name = "");
+    void queue_open_popover(PopoverKind kind, double anchor_x, const std::string& menu_name = "");
+    void queue_close_popover();
+    void queue_recapture_and_open_tuner(double anchor_x);
     void launch_settings(const std::string& page = "");
     void rebuild_spotlight_matches();
+
+    glass::GlassMaterial current_glass_material() const;
+    glass::GlassMaterial current_bar_material() const;
+    std::vector<glass::GlassPanelSpec> collect_bar_panels(int w, int h, int scale) const;
+    std::vector<glass::GlassPanelSpec> collect_popover_panels(int total_w, int total_h, int scale) const;
+
+    bool render_bar_egl(wl_surface* surf, int w, int h, int scale);
+    bool render_popover_egl(wl_surface* surf, int w, int h, int scale);
 
     void draw_bar(cairo_t* cr, int w, int h);
     void draw_bar_foreground(cairo_t* cr, int w, int h);
     void handle_bar_pointer(const wl::PointerEvent& ev);
 
     void draw_popover(cairo_t* cr, int w, int h);
+    void draw_popover_foreground(cairo_t* cr, int pw);
     void handle_popover_pointer(const wl::PointerEvent& ev);
     void handle_popover_key(const wl::KeyEvent& ev);
 
