@@ -36,6 +36,7 @@ struct GlassPanelSpec {
     bool overrideMaterial = false;
     GlassMaterial customMaterial{};
     float customOpacity = -1.0f;
+    bool noBorder = false;
 };
 
 struct ClickPulse {

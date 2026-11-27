@@ -23,6 +23,7 @@ namespace mistbar::bar {
 namespace {
 
 constexpr int kPopShadowMargin = 20;
+constexpr int kPopTopMargin = 6;
 
 void draw_cc_box_icon(cairo_t* cr, double cx, double cy, bool active, bool double_box, const themes::Color& col) {
     cairo_save(cr);
@@ -308,15 +309,22 @@ void draw_vector_quick_glyph(cairo_t* cr, int idx, double cx, double cy, const t
             cairo_stroke(cr);
             break;
         }
-        default: { // Shader Tuner sliders
-            for (int row = -1; row <= 1; ++row) {
-                const double y = cy + static_cast<double>(row) * 4.5;
-                cairo_move_to(cr, cx - 7.0, y);
-                cairo_line_to(cr, cx + 7.0, y);
+        default: { // Mizzle Settings Gear icon
+            cairo_set_line_width(cr, 1.55);
+            cairo_arc(cr, cx, cy, 4.6, 0.0, 2.0 * kPi);
+            cairo_stroke(cr);
+            cairo_set_line_width(cr, 0.9);
+            cairo_arc(cr, cx, cy, 2.4, 0.0, 2.0 * kPi);
+            cairo_stroke(cr);
+            cairo_arc(cr, cx, cy, 1.1, 0.0, 2.0 * kPi);
+            cairo_fill(cr);
+            cairo_set_line_cap(cr, CAIRO_LINE_CAP_BUTT);
+            cairo_set_line_width(cr, 1.35);
+            for (int t = 0; t < 10; ++t) {
+                const double a = static_cast<double>(t) * (2.0 * kPi / 10.0);
+                cairo_move_to(cr, cx + std::cos(a) * 4.8, cy + std::sin(a) * 4.8);
+                cairo_line_to(cr, cx + std::cos(a) * 7.0, cy + std::sin(a) * 7.0);
                 cairo_stroke(cr);
-                const double kx = cx + (row == 0 ? 2.5 : -2.5);
-                cairo_arc(cr, kx, y, 1.8, 0.0, 2.0 * kPi);
-                cairo_fill(cr);
             }
             break;
         }
@@ -339,9 +347,13 @@ BarApp::~BarApp() {
     if (popover_surface_ && popover_surface_->wl_handle()) {
         mizzle_.unregister_surface(popover_surface_->wl_handle());
     }
+    if (tuner_surface_ && tuner_surface_->wl_handle()) {
+        mizzle_.unregister_surface(tuner_surface_->wl_handle());
+    }
     bar_surface_.reset();
     trigger_surface_.reset();
     popover_surface_.reset();
+    tuner_surface_.reset();
     mizzle_.shutdown();
     invalidate_glass_caches();
     destroy_ui_overlays();
@@ -356,8 +368,13 @@ void BarApp::destroy_ui_overlays() {
         cairo_surface_destroy(pop_ui_surf_);
         pop_ui_surf_ = nullptr;
     }
+    if (tuner_ui_surf_) {
+        cairo_surface_destroy(tuner_ui_surf_);
+        tuner_ui_surf_ = nullptr;
+    }
     bar_ui_w_ = bar_ui_h_ = 0;
     pop_ui_w_ = pop_ui_h_ = 0;
+    tuner_ui_w_ = tuner_ui_h_ = 0;
 }
 
 void BarApp::invalidate_glass_caches() {
@@ -636,12 +653,13 @@ bool BarApp::ensure_popover_surface() {
     });
 
     const int total_w = popover_w_ + kPopShadowMargin * 2;
-    const int total_h = popover_h_ + kPopShadowMargin * 2;
+    const int total_h = popover_h_ + kPopTopMargin + kPopShadowMargin;
     const auto kb = (open_popover_ == PopoverKind::Spotlight)
         ? wl::LayerSurface::KeyboardMode::Exclusive
         : wl::LayerSurface::KeyboardMode::OnDemand;
 
     popover_surface_->set_visible(true);
+    popover_surface_->set_input_region(kPopShadowMargin, kPopTopMargin, popover_w_, popover_h_);
     return popover_surface_->create("mistbar-popover", wl::LayerSurface::Layer::Overlay,
                                     wl::LayerSurface::Top | wl::LayerSurface::Left,
                                     total_w, total_h, -1, kb, nullptr,
@@ -760,6 +778,9 @@ void BarApp::reload_config() {
     if (open_popover_ != PopoverKind::None && popover_surface_) {
         popover_surface_->request_redraw();
     }
+    if (tuner_open_ && tuner_surface_) {
+        tuner_surface_->request_redraw();
+    }
     trigger_async_refresh(true);
 }
 
@@ -814,11 +835,25 @@ bool BarApp::tick() {
             close_popover();
         } else if (op == PendingPopOp::Open) {
             open_popover(kind, ax, menu);
+        } else if (op == PendingPopOp::ToggleTuner) {
+            toggle_tuner_window();
+        } else if (op == PendingPopOp::CloseTuner) {
+            close_tuner_window();
         } else if (op == PendingPopOp::RecaptureAndOpenTuner) {
+            const bool reopen_tuner = tuner_open_;
+            const PopoverKind prev_pop = open_popover_;
+            const double prev_ax = popover_anchor_x_;
+            const std::string prev_menu = active_menu_name_;
             close_popover();
+            close_tuner_window();
             display_.roundtrip();
             capture_live_backdrop(true);
-            open_popover(PopoverKind::ShaderTuner, ax);
+            if (prev_pop != PopoverKind::None && prev_pop != PopoverKind::ShaderTuner) {
+                open_popover(prev_pop, prev_ax, prev_menu);
+            }
+            if (reopen_tuner || prev_pop == PopoverKind::ShaderTuner) {
+                toggle_tuner_window();
+            }
         }
     }
 
@@ -862,6 +897,16 @@ bool BarApp::tick() {
             if (popover_surface_ && popover_surface_->is_visible()) popover_surface_->request_redraw();
         } else {
             pop_click_.active = false;
+        }
+    }
+    if (tuner_click_.active) {
+        const float age = std::chrono::duration<float>(now - tuner_click_start_).count();
+        if (age < 0.36f) {
+            tuner_click_.age_sec = age;
+            pulse_active = true;
+            if (tuner_surface_ && tuner_surface_->is_visible()) tuner_surface_->request_redraw();
+        } else {
+            tuner_click_.active = false;
         }
     }
 
@@ -911,9 +956,96 @@ void BarApp::queue_close_popover() {
     pending_pop_op_ = PendingPopOp::Close;
 }
 
+void BarApp::queue_toggle_tuner() {
+    pending_pop_op_ = PendingPopOp::ToggleTuner;
+}
+
+void BarApp::queue_close_tuner() {
+    pending_pop_op_ = PendingPopOp::CloseTuner;
+}
+
 void BarApp::queue_recapture_and_open_tuner(double anchor_x) {
     pending_pop_op_ = PendingPopOp::RecaptureAndOpenTuner;
     pending_pop_anchor_x_ = anchor_x;
+}
+
+void BarApp::close_tuner_window() {
+    if (tuner_open_ || tuner_surface_) {
+        tuner_open_ = false;
+        hovered_tuner_id_.clear();
+        dragging_tuner_idx_ = -1;
+        if (tuner_surface_) {
+            if (tuner_surface_->wl_handle()) {
+                mizzle_.unregister_surface(tuner_surface_->wl_handle());
+            }
+            tuner_surface_.reset();
+        }
+        if (popover_surface_ && open_popover_ == PopoverKind::ControlCenter) {
+            popover_surface_->request_redraw();
+        }
+    }
+}
+
+void BarApp::toggle_tuner_window() {
+    if (tuner_open_) {
+        close_tuner_window();
+        return;
+    }
+
+    if (!mizzle_.has_backdrop() && open_popover_ == PopoverKind::None) {
+        capture_live_backdrop(false);
+    }
+
+    tuner_open_ = true;
+    tuner_w_ = 286;
+    tuner_h_ = 310;
+    hovered_tuner_id_.clear();
+    dragging_tuner_idx_ = -1;
+
+    const int bar_bottom = ((cfg_.look == "pill") ? cfg_.bar_margin : 0) + cfg_.bar_height;
+    const auto out = display_.primary_output();
+    const int screen_h = std::max(480, out.height);
+    tuner_left_m_ = 18;
+    tuner_top_m_ = std::max(bar_bottom + 14, screen_h - tuner_h_ - 64 - kPopShadowMargin);
+
+    if (tuner_surface_) {
+        if (tuner_surface_->wl_handle()) {
+            mizzle_.unregister_surface(tuner_surface_->wl_handle());
+        }
+        tuner_surface_.reset();
+    }
+    tuner_surface_ = std::make_unique<wl::LayerSurface>(display_);
+    tuner_surface_->set_draw_callback([this](cairo_t* cr, int w, int h) { draw_tuner_surface(cr, w, h); });
+    tuner_surface_->set_egl_draw_callback([this](wl_surface* s, int w, int h, int scale) {
+        return render_tuner_egl(s, w, h, scale);
+    });
+    tuner_surface_->set_resize_callback([this](wl_surface* s, int w, int h, int scale) {
+        if (mizzle_.has_wayland_egl()) {
+            mizzle_.resize_surface(s, w * scale, h * scale);
+        }
+    });
+    tuner_surface_->set_pointer_callback([this](const wl::PointerEvent& ev) { handle_tuner_pointer(ev); });
+    tuner_surface_->set_key_callback([this](const wl::KeyEvent& ev) { handle_tuner_key(ev); });
+    tuner_surface_->set_close_callback([this]() {
+        tuner_open_ = false;
+        hovered_tuner_id_.clear();
+        dragging_tuner_idx_ = -1;
+    });
+
+    const int total_w = tuner_w_ + kPopShadowMargin * 2;
+    const int total_h = tuner_h_ + kPopShadowMargin * 2;
+    tuner_surface_->set_visible(true);
+    tuner_surface_->set_input_region(kPopShadowMargin, kPopShadowMargin, tuner_w_, tuner_h_);
+    if (!tuner_surface_->create("mistbar-tuner", wl::LayerSurface::Layer::Overlay,
+                                wl::LayerSurface::Top | wl::LayerSurface::Left,
+                                total_w, total_h, -1, wl::LayerSurface::KeyboardMode::OnDemand,
+                                nullptr, tuner_top_m_, 0, 0, tuner_left_m_)) {
+        tuner_open_ = false;
+        tuner_surface_.reset();
+    }
+    if (popover_surface_ && open_popover_ == PopoverKind::ControlCenter) {
+        popover_surface_->request_redraw();
+    }
 }
 
 void BarApp::close_popover() {
@@ -1027,7 +1159,8 @@ void BarApp::open_popover(PopoverKind kind, double anchor_x, const std::string& 
 
     const int bar_w = std::max(640, bar_surface_->width());
     const int side_m = (cfg_.look == "pill") ? defaults::BAR_SIDE_MARGIN : 0;
-    const int top_m = ((cfg_.look == "pill") ? cfg_.bar_margin : 0) + cfg_.bar_height + 6 - kPopShadowMargin;
+    const int bar_bottom = ((cfg_.look == "pill") ? cfg_.bar_margin : 0) + cfg_.bar_height;
+    const int top_m = bar_bottom + 2;
     int target_x = static_cast<int>(anchor_x) + side_m - kPopShadowMargin;
     if (kind == PopoverKind::Spotlight) {
         target_x = (bar_w - popover_w_) / 2 + side_m - kPopShadowMargin;
@@ -1037,7 +1170,7 @@ void BarApp::open_popover(PopoverKind kind, double anchor_x, const std::string& 
     const int left_m = std::clamp(target_x, 0, max_left);
 
     popover_anchor_x_ = static_cast<double>(left_m + kPopShadowMargin);
-    popover_top_m_ = std::max(0, top_m);
+    popover_top_m_ = top_m;
     popover_left_m_ = left_m;
 
     if (!ensure_popover_surface()) {
@@ -1066,14 +1199,14 @@ glass::GlassMaterial BarApp::current_bar_material() const {
         return bar_mat;
     }
     if (cfg_.look == "attached") {
-        bar_mat.frost = std::min(bar_mat.frost, 0.30f);
+        bar_mat.frost = std::min(bar_mat.frost, 0.28f);
+        bar_mat.refraction = std::min(bar_mat.refraction, 0.14f);
+        bar_mat.specular = 0.02f;
         if (cfg_.glass_preset == "clear" || cfg_.glass_preset == "regular") {
             bar_mat.tintR = 0.20f;
             bar_mat.tintG = 0.28f;
             bar_mat.tintB = 0.44f;
-            bar_mat.tintAlpha = std::min(bar_mat.tintAlpha, 0.06f);
-            bar_mat.refraction = std::min(bar_mat.refraction, 0.22f);
-            bar_mat.specular = std::min(bar_mat.specular, 0.16f);
+            bar_mat.tintAlpha = std::min(bar_mat.tintAlpha, 0.05f);
         }
     }
     return bar_mat;
@@ -1091,16 +1224,18 @@ std::vector<glass::GlassPanelSpec> BarApp::collect_bar_panels(int w, int h, int 
     p.isPill = (cfg_.look == "pill");
     p.overrideMaterial = true;
     p.customMaterial = current_bar_material();
-    p.customOpacity = (cfg_.glass_preset == "solid") ? 1.0f : ((cfg_.look == "pill") ? 0.44f : 0.34f);
+    p.customOpacity = (cfg_.glass_preset == "solid") ? 1.0f : ((cfg_.look == "pill") ? 0.44f : 0.30f);
+    p.noBorder = (cfg_.look == "attached");
     return {p};
 }
 
 std::vector<glass::GlassPanelSpec> BarApp::collect_popover_panels(int total_w, int total_h, int scale) const {
     std::vector<glass::GlassPanelSpec> panels;
     const float sc = static_cast<float>(std::max(1, scale));
-    const float m = static_cast<float>(kPopShadowMargin);
-    const float pw = std::max(1.0f, static_cast<float>(total_w) - 2.0f * m);
-    const float ph = std::max(1.0f, static_cast<float>(total_h) - 2.0f * m);
+    const float mx = static_cast<float>(kPopShadowMargin);
+    const float my = static_cast<float>(kPopTopMargin);
+    const float pw = std::max(1.0f, static_cast<float>(total_w) - 2.0f * mx);
+    const float ph = std::max(1.0f, static_cast<float>(total_h) - my - mx);
 
     auto push_panel = [&](float x, float y, float w, float h, float r, bool is_pill, float opacity) {
         glass::GlassPanelSpec spec;
@@ -1116,30 +1251,46 @@ std::vector<glass::GlassPanelSpec> BarApp::collect_popover_panels(int total_w, i
 
     if (open_popover_ == PopoverKind::ControlCenter) {
         // Slim mizzle Control Center: every pill & circle is an independent floating glass lens
-        push_panel(m + 0.0f,   m + 0.0f,   120.0f, 44.0f, 22.0f, true, 0.50f);  // Wi-Fi
-        push_panel(m + 0.0f,   m + 52.0f,  56.0f,  44.0f, 22.0f, true, 0.48f);  // Bluetooth
-        push_panel(m + 64.0f,  m + 52.0f,  56.0f,  44.0f, 22.0f, true, 0.48f);  // AirDrop
-        push_panel(m + 128.0f, m + 0.0f,   120.0f, 96.0f, 20.0f, true, 0.50f);  // Media card
-        push_panel(m + 0.0f,   m + 104.0f, 120.0f, 44.0f, 22.0f, true, 0.50f);  // Focus
-        push_panel(m + 128.0f, m + 104.0f, 56.0f,  44.0f, 22.0f, true, 0.48f);  // Workspaces
-        push_panel(m + 192.0f, m + 104.0f, 56.0f,  44.0f, 22.0f, true, 0.48f);  // Bar Look
-        push_panel(m + 0.0f,   m + 156.0f, 248.0f, 50.0f, 22.0f, true, 0.50f);  // Sound
-        push_panel(m + 0.0f,   m + 214.0f, 248.0f, 50.0f, 22.0f, true, 0.50f);  // Display
+        push_panel(mx + 0.0f,   my + 0.0f,   120.0f, 44.0f, 22.0f, true, 0.50f);  // Wi-Fi
+        push_panel(mx + 0.0f,   my + 52.0f,  56.0f,  44.0f, 22.0f, true, 0.48f);  // Bluetooth
+        push_panel(mx + 64.0f,  my + 52.0f,  56.0f,  44.0f, 22.0f, true, 0.48f);  // AirDrop
+        push_panel(mx + 128.0f, my + 0.0f,   120.0f, 96.0f, 20.0f, true, 0.50f);  // Media card
+        push_panel(mx + 0.0f,   my + 104.0f, 120.0f, 44.0f, 22.0f, true, 0.50f);  // Focus
+        push_panel(mx + 128.0f, my + 104.0f, 56.0f,  44.0f, 22.0f, true, 0.48f);  // Workspaces
+        push_panel(mx + 192.0f, my + 104.0f, 56.0f,  44.0f, 22.0f, true, 0.48f);  // Bar Look
+        push_panel(mx + 0.0f,   my + 156.0f, 248.0f, 50.0f, 22.0f, true, 0.50f);  // Sound
+        push_panel(mx + 0.0f,   my + 214.0f, 248.0f, 50.0f, 22.0f, true, 0.50f);  // Display
         for (int i = 0; i < 8; ++i) {
             const int col = i % 4;
             const int row = i / 4;
-            push_panel(m + static_cast<float>(col) * 64.0f,
-                       m + 272.0f + static_cast<float>(row) * 52.0f,
+            push_panel(mx + static_cast<float>(col) * 64.0f,
+                       my + 272.0f + static_cast<float>(row) * 52.0f,
                        56.0f, 44.0f, 22.0f, true, 0.48f);
         }
-        push_panel(m + 76.0f, m + 380.0f, 96.0f, 24.0f, 12.0f, true, 0.48f);   // Edit Controls
+        push_panel(mx + 76.0f, my + 380.0f, 96.0f, 24.0f, 12.0f, true, 0.48f);   // Edit Controls
         return panels;
     }
 
     const float pop_r = (open_popover_ == PopoverKind::Spotlight) ? 21.0f :
                         ((open_popover_ == PopoverKind::ShaderTuner) ? 20.0f : 18.0f);
-    push_panel(m, m, pw, ph, pop_r, open_popover_ == PopoverKind::Spotlight, 0.62f);
+    push_panel(mx, my, pw, ph, pop_r, open_popover_ == PopoverKind::Spotlight, 0.62f);
     return panels;
+}
+
+std::vector<glass::GlassPanelSpec> BarApp::collect_tuner_panels(int total_w, int total_h, int scale) const {
+    const float sc = static_cast<float>(std::max(1, scale));
+    const float m = static_cast<float>(kPopShadowMargin);
+    const float pw = std::max(1.0f, static_cast<float>(total_w) - 2.0f * m);
+    const float ph = std::max(1.0f, static_cast<float>(total_h) - 2.0f * m);
+    glass::GlassPanelSpec spec;
+    spec.x = m * sc;
+    spec.y = m * sc;
+    spec.w = pw * sc;
+    spec.h = ph * sc;
+    spec.radius = 20.0f * sc;
+    spec.isPill = false;
+    spec.customOpacity = (cfg_.glass_preset == "solid") ? 1.0f : 0.62f;
+    return {spec};
 }
 
 bool BarApp::render_bar_egl(wl_surface* surf, int w, int h, int scale) {
@@ -1207,7 +1358,7 @@ bool BarApp::render_popover_egl(wl_surface* surf, int w, int h, int scale) {
     cairo_paint(cr);
     cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
     if (sc > 1) cairo_scale(cr, static_cast<double>(sc), static_cast<double>(sc));
-    cairo_translate(cr, static_cast<double>(kPopShadowMargin), static_cast<double>(kPopShadowMargin));
+    cairo_translate(cr, static_cast<double>(kPopShadowMargin), static_cast<double>(kPopTopMargin));
     draw_popover_foreground(cr, std::max(1, w - kPopShadowMargin * 2));
     cairo_destroy(cr);
 
@@ -1226,6 +1377,48 @@ bool BarApp::render_popover_egl(wl_surface* surf, int w, int h, int scale) {
         current_glass_material(),
         collect_popover_panels(w, h, sc),
         pop_ui_surf_,
+        translucent);
+}
+
+bool BarApp::render_tuner_egl(wl_surface* surf, int w, int h, int scale) {
+    if (!mizzle_.is_available() || !mizzle_.has_wayland_egl() || w <= 0 || h <= 0) {
+        return false;
+    }
+    const int sc = std::max(1, scale);
+    const int px_w = w * sc;
+    const int px_h = h * sc;
+    if (!tuner_ui_surf_ || tuner_ui_w_ != px_w || tuner_ui_h_ != px_h) {
+        if (tuner_ui_surf_) cairo_surface_destroy(tuner_ui_surf_);
+        tuner_ui_surf_ = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, px_w, px_h);
+        tuner_ui_w_ = px_w;
+        tuner_ui_h_ = px_h;
+    }
+
+    tuner_actions_.clear();
+    cairo_t* cr = cairo_create(tuner_ui_surf_);
+    cairo_set_operator(cr, CAIRO_OPERATOR_CLEAR);
+    cairo_paint(cr);
+    cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
+    if (sc > 1) cairo_scale(cr, static_cast<double>(sc), static_cast<double>(sc));
+    cairo_translate(cr, static_cast<double>(kPopShadowMargin), static_cast<double>(kPopShadowMargin));
+    draw_shader_tuner_popover(cr, std::max(1, w - kPopShadowMargin * 2));
+    cairo_destroy(cr);
+
+    const float time_sec = std::chrono::duration<float>(
+                               std::chrono::steady_clock::now() - start_time_).count();
+    glass::ClickPulse click = tuner_click_;
+    click.x *= static_cast<float>(sc);
+    click.y *= static_cast<float>(sc);
+
+    const bool translucent = (cfg_.glass_preset != "solid");
+    return mizzle_.render_surface(
+        surf, px_w, px_h,
+        static_cast<float>(tuner_left_m_ * sc),
+        static_cast<float>(tuner_top_m_ * sc),
+        time_sec, click,
+        current_glass_material(),
+        collect_tuner_panels(w, h, sc),
+        tuner_ui_surf_,
         translucent);
 }
 
@@ -1795,12 +1988,12 @@ void BarApp::render_control_center_preview(cairo_t* cr, int w, int h) {
     if (mizzle_.is_available()) {
         cairo_surface_t* ui = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, std::max(1, w), std::max(1, h));
         cairo_t* ucr = cairo_create(ui);
-        cairo_translate(ucr, static_cast<double>(kPopShadowMargin), static_cast<double>(kPopShadowMargin));
+        cairo_translate(ucr, static_cast<double>(kPopShadowMargin), static_cast<double>(kPopTopMargin));
         draw_control_center(ucr, 248);
         cairo_destroy(ucr);
 
         cairo_surface_t* out = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, std::max(1, w), std::max(1, h));
-        if (mizzle_.render_to_cairo(out, 964.0f, 26.0f, 0.0f, {}, current_glass_material(),
+        if (mizzle_.render_to_cairo(out, 964.0f, 28.0f, 0.0f, {}, current_glass_material(),
                                     collect_popover_panels(w, h, 1), ui, cfg_.glass_preset != "solid")) {
             cairo_set_source_surface(cr, out, 0.0, 0.0);
             cairo_paint(cr);
@@ -1814,7 +2007,7 @@ void BarApp::render_control_center_preview(cairo_t* cr, int w, int h) {
     }
 
     cairo_save(cr);
-    cairo_translate(cr, static_cast<double>(kPopShadowMargin), static_cast<double>(kPopShadowMargin));
+    cairo_translate(cr, static_cast<double>(kPopShadowMargin), static_cast<double>(kPopTopMargin));
     draw_control_center(cr, w - kPopShadowMargin * 2);
     cairo_restore(cr);
     open_popover_ = PopoverKind::None;
@@ -1840,21 +2033,22 @@ void BarApp::draw_popover_foreground(cairo_t* cr, int pw) {
 
 void BarApp::draw_popover(cairo_t* cr, int total_w, int total_h) {
     pop_actions_.clear();
-    const double m = static_cast<double>(kPopShadowMargin);
-    const double w = std::max(1.0, static_cast<double>(total_w) - 2.0 * m);
-    const double h = std::max(1.0, static_cast<double>(total_h) - 2.0 * m);
+    const double mx = static_cast<double>(kPopShadowMargin);
+    const double my = static_cast<double>(kPopTopMargin);
+    const double w = std::max(1.0, static_cast<double>(total_w) - 2.0 * mx);
+    const double h = std::max(1.0, static_cast<double>(total_h) - my - mx);
 
     if (mizzle_.is_available()) {
         cairo_surface_t* ui = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, std::max(1, total_w), std::max(1, total_h));
         cairo_t* ucr = cairo_create(ui);
-        cairo_translate(ucr, m, m);
+        cairo_translate(ucr, mx, my);
         draw_popover_foreground(ucr, static_cast<int>(w));
         cairo_destroy(ucr);
 
         cairo_surface_t* out = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, std::max(1, total_w), std::max(1, total_h));
         if (mizzle_.render_to_cairo(out, static_cast<float>(popover_left_m_), static_cast<float>(popover_top_m_),
                                     0.0f, pop_click_, current_glass_material(),
-                                    collect_popover_panels(total_w, total_h, 1), ui)) {
+                                    collect_popover_panels(total_w, total_h, 1), ui, cfg_.glass_preset != "solid")) {
             cairo_set_source_surface(cr, out, 0.0, 0.0);
             cairo_paint(cr);
             cairo_surface_destroy(out);
@@ -1868,7 +2062,7 @@ void BarApp::draw_popover(cairo_t* cr, int total_w, int total_h) {
     if (open_popover_ == PopoverKind::ControlCenter) {
         // Fallback path when GPU is unavailable: draw floating pills without an outer box
         cairo_save(cr);
-        cairo_translate(cr, m, m);
+        cairo_translate(cr, mx, my);
         draw_popover_foreground(cr, static_cast<int>(w));
         cairo_restore(cr);
         return;
@@ -1885,18 +2079,17 @@ void BarApp::draw_popover(cairo_t* cr, int total_w, int total_h) {
         cairo_paint(pcr);
         cairo_set_operator(pcr, CAIRO_OPERATOR_OVER);
 
-        // Clip OUT the glass interior so drop shadow never darkens translucent Liquid Glass
         cairo_save(pcr);
         cairo_new_path(pcr);
         cairo_rectangle(pcr, 0.0, 0.0, static_cast<double>(total_w), static_cast<double>(total_h));
-        glass::append_rounded_rect(pcr, m, m, w, h, pop_r);
+        glass::append_rounded_rect(pcr, mx, my, w, h, pop_r);
         cairo_set_fill_rule(pcr, CAIRO_FILL_RULE_EVEN_ODD);
         cairo_clip(pcr);
-        window::draw_window_shadow(pcr, m, m, w, h, pop_r, 16, true);
+        window::draw_window_shadow(pcr, mx, my, w, h, pop_r, 16, true);
         cairo_restore(pcr);
 
         cairo_save(pcr);
-        cairo_translate(pcr, m, m);
+        cairo_translate(pcr, mx, my);
         glass::draw_glass_panel(pcr, &backdrop_, 0.0, 0.0, popover_anchor_x_,
                                 static_cast<double>(cfg_.bar_height + 10),
                                 w, h, pop_r, palette_, &palette_.panel_bg, overlay_only);
@@ -1914,7 +2107,7 @@ void BarApp::draw_popover(cairo_t* cr, int total_w, int total_h) {
     cairo_restore(cr);
 
     cairo_save(cr);
-    cairo_translate(cr, m, m);
+    cairo_translate(cr, mx, my);
     draw_popover_foreground(cr, static_cast<int>(w));
     cairo_restore(cr);
 }
@@ -2352,10 +2545,31 @@ void BarApp::draw_shader_tuner_popover(cairo_t* cr, int w) {
         ? themes::Color{0.20, 0.24, 0.30, 0.72}
         : themes::Color{0.84, 0.89, 0.96, 0.76};
 
-    window::draw_pango_text_centered(cr, "Liquid Glass Shader Lab", 16.0, 12.0, pw - 32.0, 18.0,
+    auto& actions_out = tuner_open_ ? tuner_actions_ : pop_actions_;
+    const std::string& hov_id = tuner_open_ ? hovered_tuner_id_ : hovered_pop_id_;
+
+    window::draw_pango_text_centered(cr, "Liquid Glass Shader Lab", 16.0, 12.0, pw - 56.0, 18.0,
                                      9.5, true, ink);
     window::draw_pango_text_centered(cr, "Drag sliders to tune bar and Control Center glass live",
                                      16.0, 29.0, pw - 32.0, 15.0, 7.0, false, sub);
+
+    if (tuner_open_) {
+        const bool close_hov = (hov_id == "tn:close");
+        const double cx = pw - 24.0;
+        const double cy = 20.0;
+        cairo_save(cr);
+        cairo_arc(cr, cx, cy, 8.5, 0.0, 6.283185);
+        cairo_set_source_rgba(cr, ink.r, ink.g, ink.b, close_hov ? 0.24 : 0.12);
+        cairo_fill(cr);
+        cairo_set_source_rgba(cr, ink.r, ink.g, ink.b, 0.86);
+        cairo_set_line_width(cr, 1.35);
+        cairo_set_line_cap(cr, CAIRO_LINE_CAP_ROUND);
+        cairo_move_to(cr, cx - 3.0, cy - 3.0); cairo_line_to(cr, cx + 3.0, cy + 3.0);
+        cairo_move_to(cr, cx + 3.0, cy - 3.0); cairo_line_to(cr, cx - 3.0, cy + 3.0);
+        cairo_stroke(cr);
+        cairo_restore(cr);
+        actions_out.push_back({cx - 10.0, cy - 10.0, 20.0, 20.0, "close_tuner", "", "tn:close"});
+    }
 
     const glass::GlassMaterial mat = current_glass_material();
     struct TunerRow {
@@ -2401,12 +2615,12 @@ void BarApp::draw_shader_tuner_popover(cairo_t* cr, int w) {
 
     auto draw_tuner_btn = [&](double bx, double by, double bw, const std::string& label,
                               const std::string& aid, const std::string& arg, const std::string& hk) {
-        const bool hov = (hovered_pop_id_ == hk);
+        const bool hov = (hov_id == hk);
         glass::append_rounded_rect(cr, bx, by, bw, 22.0, 11.0);
         cairo_set_source_rgba(cr, ink.r, ink.g, ink.b, hov ? 0.22 : 0.14);
         cairo_fill(cr);
         window::draw_pango_text_centered(cr, label, bx, by, bw, 22.0, 7.5, true, ink, true, false);
-        pop_actions_.push_back({bx, by, bw, 22.0, aid, arg, hk});
+        actions_out.push_back({bx, by, bw, 22.0, aid, arg, hk});
     };
 
     const double bw = (pw - 42.0) * 0.5;
@@ -2414,6 +2628,42 @@ void BarApp::draw_shader_tuner_popover(cairo_t* cr, int w) {
     draw_tuner_btn(26.0 + bw, 242.0, bw, "Look: " + cfg_.look, "look_toggle", "", "tn:look");
     draw_tuner_btn(16.0, 274.0, bw, "Recapture BG", "recapture_bg", "", "tn:recap");
     draw_tuner_btn(26.0 + bw, 274.0, bw, "All Settings...", "settings", "liquid-glass", "tn:settings");
+}
+
+void BarApp::draw_tuner_surface(cairo_t* cr, int total_w, int total_h) {
+    tuner_actions_.clear();
+    const double m = static_cast<double>(kPopShadowMargin);
+    const double w = std::max(1.0, static_cast<double>(total_w) - 2.0 * m);
+    const double h = std::max(1.0, static_cast<double>(total_h) - 2.0 * m);
+
+    if (mizzle_.is_available()) {
+        cairo_surface_t* ui = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, std::max(1, total_w), std::max(1, total_h));
+        cairo_t* ucr = cairo_create(ui);
+        cairo_translate(ucr, m, m);
+        draw_shader_tuner_popover(ucr, static_cast<int>(w));
+        cairo_destroy(ucr);
+
+        cairo_surface_t* out = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, std::max(1, total_w), std::max(1, total_h));
+        if (mizzle_.render_to_cairo(out, static_cast<float>(tuner_left_m_), static_cast<float>(tuner_top_m_),
+                                    0.0f, tuner_click_, current_glass_material(),
+                                    collect_tuner_panels(total_w, total_h, 1), ui, cfg_.glass_preset != "solid")) {
+            cairo_set_source_surface(cr, out, 0.0, 0.0);
+            cairo_paint(cr);
+            cairo_surface_destroy(out);
+            cairo_surface_destroy(ui);
+            return;
+        }
+        cairo_surface_destroy(out);
+        cairo_surface_destroy(ui);
+    }
+
+    cairo_save(cr);
+    cairo_translate(cr, m, m);
+    glass::append_rounded_rect(cr, 0.0, 0.0, w, h, 20.0);
+    cairo_set_source_rgba(cr, 0.08, 0.10, 0.14, 0.72);
+    cairo_fill(cr);
+    draw_shader_tuner_popover(cr, static_cast<int>(w));
+    cairo_restore(cr);
 }
 
 void BarApp::draw_calendar_popover(cairo_t* cr, int w) {
@@ -2472,7 +2722,7 @@ void BarApp::draw_power_popover(cairo_t* cr, int w) {
 
 void BarApp::handle_popover_pointer(const wl::PointerEvent& ev) {
     const double lx = ev.x - static_cast<double>(kPopShadowMargin);
-    const double ly = ev.y - static_cast<double>(kPopShadowMargin);
+    const double ly = ev.y - static_cast<double>(kPopTopMargin);
 
     if (ev.type == wl::PointerEvent::Type::Leave) {
         if (!hovered_pop_id_.empty()) {
@@ -2531,7 +2781,8 @@ void BarApp::handle_popover_pointer(const wl::PointerEvent& ev) {
             backdrop_.load_wallpaper(palette_.wallpaper_path, out.width, out.height, palette_.blur_radius);
         }
         bar_surface_->request_redraw();
-        popover_surface_->request_redraw();
+        if (popover_surface_) popover_surface_->request_redraw();
+        if (tuner_surface_) tuner_surface_->request_redraw();
     };
 
     if (ev.type == wl::PointerEvent::Type::Motion) {
@@ -2638,7 +2889,9 @@ void BarApp::handle_popover_pointer(const wl::PointerEvent& ev) {
                 launch_settings(a.arg);
                 queue_close_popover();
             } else if (a.id == "open_tuner") {
-                queue_open_popover(PopoverKind::ShaderTuner, popover_anchor_x_);
+                queue_toggle_tuner();
+            } else if (a.id == "close_tuner") {
+                queue_close_tuner();
             } else if (a.id == "open_cc") {
                 queue_open_popover(PopoverKind::ControlCenter, popover_anchor_x_);
             } else if (a.id == "open_spotlight") {
@@ -2846,6 +3099,125 @@ void BarApp::handle_popover_key(const wl::KeyEvent& ev) {
     }
 }
 
+void BarApp::handle_tuner_pointer(const wl::PointerEvent& ev) {
+    const double lx = ev.x - static_cast<double>(kPopShadowMargin);
+    const double ly = ev.y - static_cast<double>(kPopShadowMargin);
+
+    if (ev.type == wl::PointerEvent::Type::Leave) {
+        if (!hovered_tuner_id_.empty()) {
+            hovered_tuner_id_.clear();
+            if (tuner_surface_) tuner_surface_->request_redraw();
+        }
+        return;
+    }
+
+    if (ev.type == wl::PointerEvent::Type::ButtonRelease) {
+        if (dragging_tuner_idx_ >= 0) {
+            dragging_tuner_idx_ = -1;
+            config::save_config(cfg_);
+        }
+        return;
+    }
+
+    auto apply_tuner_slider = [&](int idx, double x) {
+        const double sx = 16.0;
+        const double sw = std::max(1.0, static_cast<double>(tuner_w_) - 32.0);
+        const double n = std::clamp((x - sx) / sw, 0.0, 1.0);
+        if (idx == 0) cfg_.refraction_strength = static_cast<float>(n);
+        else if (idx == 1) cfg_.chromatic_aberration = static_cast<float>(n);
+        else if (idx == 2) cfg_.blur_radius = static_cast<int>(std::round(n * 48.0));
+        else if (idx == 3) cfg_.specular_intensity = static_cast<float>(n);
+        else if (idx == 4) cfg_.tint_opacity = static_cast<float>(n * 0.45);
+        palette_ = themes::resolve_palette(cfg_);
+        invalidate_glass_caches();
+        if (idx == 2 && !mizzle_.is_available()) {
+            const auto out = display_.primary_output();
+            backdrop_.load_wallpaper(palette_.wallpaper_path, out.width, out.height, palette_.blur_radius);
+        }
+        bar_surface_->request_redraw();
+        if (popover_surface_) popover_surface_->request_redraw();
+        if (tuner_surface_) tuner_surface_->request_redraw();
+    };
+
+    if (ev.type == wl::PointerEvent::Type::Motion) {
+        if (dragging_tuner_idx_ >= 0) {
+            apply_tuner_slider(dragging_tuner_idx_, lx);
+            return;
+        }
+        std::string next_h;
+        for (const auto& a : tuner_actions_) {
+            if (!a.hover_key.empty() && lx >= a.x && lx <= a.x + a.w && ly >= a.y && ly <= a.y + a.h) {
+                next_h = a.hover_key;
+                break;
+            }
+        }
+        if (next_h != hovered_tuner_id_) {
+            hovered_tuner_id_ = next_h;
+            if (tuner_surface_) tuner_surface_->request_redraw();
+        }
+        return;
+    }
+
+    if (ev.type != wl::PointerEvent::Type::ButtonPress || ev.button != BTN_LEFT) {
+        return;
+    }
+
+    if (lx < 0.0 || ly < 0.0 || lx > tuner_w_ || ly > tuner_h_) {
+        queue_close_tuner();
+        return;
+    }
+
+    tuner_click_.x = static_cast<float>(ev.x);
+    tuner_click_.y = static_cast<float>(ev.y);
+    tuner_click_.age_sec = 0.0f;
+    tuner_click_.active = true;
+    tuner_click_start_ = std::chrono::steady_clock::now();
+    if (tuner_surface_) tuner_surface_->request_redraw();
+
+    for (int i = 0; i < 5; ++i) {
+        const double sy = 50.0 + static_cast<double>(i) * 36.0;
+        if (lx >= 10.0 && lx <= tuner_w_ - 10.0 && ly >= sy + 4.0 && ly <= sy + 32.0) {
+            dragging_tuner_idx_ = i;
+            apply_tuner_slider(i, lx);
+            return;
+        }
+    }
+
+    const auto actions_copy = tuner_actions_;
+    for (const auto& a : actions_copy) {
+        if (lx >= a.x && lx <= a.x + a.w && ly >= a.y && ly <= a.y + a.h) {
+            if (a.id == "close_tuner") {
+                queue_close_tuner();
+            } else if (a.id == "preset_cycle") {
+                static const char* kCycle[5] = {"clear", "frosted", "smoked", "aqua", "solid"};
+                std::size_t idx = 0;
+                for (std::size_t pi = 0; pi < 5; ++pi) {
+                    if (cfg_.glass_preset == kCycle[pi]) { idx = (pi + 1) % 5; break; }
+                }
+                config::apply_glass_preset(cfg_, kCycle[idx]);
+                config::save_config(cfg_);
+                reload_config();
+            } else if (a.id == "look_toggle") {
+                cfg_.look = (cfg_.look == "attached") ? "pill" : "attached";
+                config::save_config(cfg_);
+                reload_config();
+            } else if (a.id == "recapture_bg") {
+                queue_recapture_and_open_tuner(popover_anchor_x_);
+            } else if (a.id == "settings") {
+                launch_settings(a.arg);
+                queue_close_tuner();
+            }
+            return;
+        }
+    }
+}
+
+void BarApp::handle_tuner_key(const wl::KeyEvent& ev) {
+    if (ev.pressed && ev.keysym == XKB_KEY_Escape) {
+        queue_close_tuner();
+    }
+}
+
 std::string BarApp::handle_ipc(const std::string& cmd, bool& should_quit) {
     if (cmd == "quit") {
         should_quit = true;
@@ -2856,9 +3228,8 @@ std::string BarApp::handle_ipc(const std::string& cmd, bool& should_quit) {
         return "ok";
     }
     if (cmd == "tuner") {
-        const int bar_w = std::max(640, bar_surface_->width());
-        open_popover(PopoverKind::ShaderTuner, static_cast<double>(bar_w - 310));
-        return "tuner opened";
+        toggle_tuner_window();
+        return tuner_open_ ? "tuner opened" : "tuner closed";
     }
     if (cmd == "cc" || cmd == "control-center") {
         const int bar_w = std::max(640, bar_surface_->width());

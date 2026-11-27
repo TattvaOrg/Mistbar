@@ -417,6 +417,7 @@ struct MizzleRenderer::Impl {
             const GLint loc_shad = glGetUniformLocation(prog_glass, "uShadowAlpha");
             const GLint loc_pill = glGetUniformLocation(prog_glass, "uIsPill");
             const GLint loc_opac = glGetUniformLocation(prog_glass, "uCustomOpacity");
+            const GLint loc_nobd = glGetUniformLocation(prog_glass, "uNoBorder");
 
             for (const auto& p : panels) {
                 if (p.w <= 1.0f || p.h <= 1.0f) continue;
@@ -431,6 +432,7 @@ struct MizzleRenderer::Impl {
                 glUniform1f(loc_shad, m.shadowAlpha);
                 glUniform1f(loc_pill, p.isPill ? 1.0f : 0.0f);
                 glUniform1f(loc_opac, p.customOpacity);
+                glUniform1f(loc_nobd, p.noBorder ? 1.0f : 0.0f);
                 draw_quad();
             }
         }

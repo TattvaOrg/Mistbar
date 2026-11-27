@@ -390,6 +390,22 @@ void Surface::dispatch_key(const KeyEvent& ev) {
     if (on_key_) on_key_(ev);
 }
 
+void Surface::set_input_region(int x, int y, int w, int h) {
+    if (!wl_surface_ || !display_.compositor()) return;
+    wl_region* reg = wl_compositor_create_region(display_.compositor());
+    if (!reg) return;
+    if (w > 0 && h > 0) {
+        wl_region_add(reg, x, y, w, h);
+    }
+    wl_surface_set_input_region(wl_surface_, reg);
+    wl_region_destroy(reg);
+}
+
+void Surface::clear_input_region() {
+    if (!wl_surface_) return;
+    wl_surface_set_input_region(wl_surface_, nullptr);
+}
+
 LayerSurface::LayerSurface(Display& display) : Surface(display) {}
 
 LayerSurface::~LayerSurface() {

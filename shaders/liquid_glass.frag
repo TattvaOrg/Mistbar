@@ -21,6 +21,7 @@ uniform float uTime;
 uniform vec4 uClick; // (clickX, clickY, ageSec, activeFlag >0.5)
 uniform float uTranslucentGlass;
 uniform float uCustomOpacity;
+uniform float uNoBorder;
 
 float sdRoundedBox(vec2 p, vec2 b, float r) {
     vec2 q = abs(p) - b + vec2(r);
@@ -181,15 +182,16 @@ void main() {
 
     float innerKiss = pow(edgeT, 2.9) * smoothstep(0.0, 1.2, depthInside);
     vec3 causticTint = mix(vec3(0.94, 0.97, 1.0), edgeLight * 1.38 + vec3(0.24), clamp(edgeLightLuma * 0.95, 0.0, 0.70));
-    glassColor += causticTint * innerKiss * (0.07 + 0.19 * diagShine) * uSpecular;
+    float rimScale = (1.0 - clamp(uNoBorder, 0.0, 1.0));
+    glassColor += causticTint * innerKiss * (0.04 + 0.11 * diagShine) * uSpecular * rimScale;
 
-    float razorRim = smoothstep(1.10, 0.0, depthInside);
-    float rimAlpha = razorRim * (0.14 + 0.48 * diagShine) * uSpecular;
-    glassColor = mix(glassColor, vec3(0.97, 0.99, 1.0), clamp(rimAlpha, 0.0, 0.68));
+    float razorRim = smoothstep(1.0, 0.0, depthInside) * rimScale;
+    float rimAlpha = razorRim * (0.05 + 0.20 * diagShine) * uSpecular;
+    glassColor = mix(glassColor, vec3(0.97, 0.99, 1.0), clamp(rimAlpha, 0.0, 0.26));
 
     float baseTranslucent = (uCustomOpacity >= 0.0)
         ? uCustomOpacity
-        : clamp(0.32 + uFrost * 0.34 + uTintColor.a * 0.62 + rimCurve * 0.30 + razorRim * 0.45, 0.26, 0.90);
+        : clamp(0.32 + uFrost * 0.34 + uTintColor.a * 0.62 + rimCurve * 0.22 + razorRim * 0.25, 0.26, 0.90);
     float panelAlpha = mix(1.0, baseTranslucent, clamp(uTranslucentGlass, 0.0, 1.0));
 
     vec3 clampedGlass = clamp(glassColor, 0.0, 1.0) * panelAlpha;

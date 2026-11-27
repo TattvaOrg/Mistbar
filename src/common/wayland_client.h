@@ -128,6 +128,8 @@ public:
 
     void request_redraw();
     void render_now();
+    void set_input_region(int x, int y, int w, int h);
+    void clear_input_region();
 
     wl_surface* wl_handle() const noexcept { return wl_surface_; }
     int width() const noexcept { return width_; }

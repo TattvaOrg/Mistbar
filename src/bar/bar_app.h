@@ -108,6 +108,7 @@ private:
     std::unique_ptr<wl::LayerSurface> bar_surface_;
     std::unique_ptr<wl::LayerSurface> trigger_surface_;
     std::unique_ptr<wl::LayerSurface> popover_surface_;
+    std::unique_ptr<wl::LayerSurface> tuner_surface_;
 
     // Bar state
     bool manually_hidden_ = false;
@@ -131,6 +132,8 @@ private:
     std::chrono::steady_clock::time_point bar_click_start_{};
     glass::ClickPulse pop_click_{};
     std::chrono::steady_clock::time_point pop_click_start_{};
+    glass::ClickPulse tuner_click_{};
+    std::chrono::steady_clock::time_point tuner_click_start_{};
 
     // Offscreen Cairo UI overlay surfaces uploaded to MizzleRenderer
     cairo_surface_t* bar_ui_surf_ = nullptr;
@@ -139,6 +142,9 @@ private:
     cairo_surface_t* pop_ui_surf_ = nullptr;
     int pop_ui_w_ = 0;
     int pop_ui_h_ = 0;
+    cairo_surface_t* tuner_ui_surf_ = nullptr;
+    int tuner_ui_w_ = 0;
+    int tuner_ui_h_ = 0;
 
     // Fallback cached glass surfaces (used only when hardware EGL is unavailable)
     cairo_surface_t* bar_glass_cache_ = nullptr;
@@ -166,11 +172,20 @@ private:
     int dragging_tuner_idx_ = -1;
     std::chrono::steady_clock::time_point last_hw_cmd_{};
 
-    enum class PendingPopOp { None, Open, Close, RecaptureAndOpenTuner };
+    enum class PendingPopOp { None, Open, Close, ToggleTuner, CloseTuner, RecaptureAndOpenTuner };
     PendingPopOp pending_pop_op_ = PendingPopOp::None;
     PopoverKind pending_pop_kind_ = PopoverKind::None;
     double pending_pop_anchor_x_ = 0.0;
     std::string pending_pop_menu_name_;
+
+    // Separate floating Glass Editor / Shader Lab window state
+    bool tuner_open_ = false;
+    int tuner_top_m_ = 60;
+    int tuner_left_m_ = 18;
+    int tuner_w_ = 286;
+    int tuner_h_ = 310;
+    std::string hovered_tuner_id_;
+    std::vector<PopAction> tuner_actions_;
 
     // Background worker for non-blocking subprocess polling
     struct HwSnapshot {
@@ -232,8 +247,12 @@ private:
     bool ensure_popover_surface();
     void close_popover();
     void open_popover(PopoverKind kind, double anchor_x, const std::string& menu_name = "");
+    void toggle_tuner_window();
+    void close_tuner_window();
     void queue_open_popover(PopoverKind kind, double anchor_x, const std::string& menu_name = "");
     void queue_close_popover();
+    void queue_toggle_tuner();
+    void queue_close_tuner();
     void queue_recapture_and_open_tuner(double anchor_x);
     void launch_settings(const std::string& page = "");
     void rebuild_spotlight_matches();
@@ -242,9 +261,11 @@ private:
     glass::GlassMaterial current_bar_material() const;
     std::vector<glass::GlassPanelSpec> collect_bar_panels(int w, int h, int scale) const;
     std::vector<glass::GlassPanelSpec> collect_popover_panels(int total_w, int total_h, int scale) const;
+    std::vector<glass::GlassPanelSpec> collect_tuner_panels(int total_w, int total_h, int scale) const;
 
     bool render_bar_egl(wl_surface* surf, int w, int h, int scale);
     bool render_popover_egl(wl_surface* surf, int w, int h, int scale);
+    bool render_tuner_egl(wl_surface* surf, int w, int h, int scale);
 
     void draw_bar(cairo_t* cr, int w, int h);
     void draw_bar_foreground(cairo_t* cr, int w, int h);
@@ -254,6 +275,10 @@ private:
     void draw_popover_foreground(cairo_t* cr, int pw);
     void handle_popover_pointer(const wl::PointerEvent& ev);
     void handle_popover_key(const wl::KeyEvent& ev);
+
+    void draw_tuner_surface(cairo_t* cr, int w, int h);
+    void handle_tuner_pointer(const wl::PointerEvent& ev);
+    void handle_tuner_key(const wl::KeyEvent& ev);
 
     void draw_logo_menu(cairo_t* cr, int w);
     void draw_app_menu(cairo_t* cr, int w);
