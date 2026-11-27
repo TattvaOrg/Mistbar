@@ -5,7 +5,7 @@
 <img width="1365" height="40" alt="glasss" src="https://github.com/user-attachments/assets/f2d739d0-7f9d-4fd9-af03-ac0b35a7b3b4" />
 
 >[!IMPORTANT]
->Make sure that you choose latest update during installetion , because of the main branch is under new devlopmentes so.....
+>Make sure that you choose latest update during installetion , because of the main branch is under new devlopmentes, and if fails cause of cmake or that things, just download a release and install it locally  so.....
 
 **macOS Tahoe Liquid Glass Top Bar & Black-Only Desktop Settings for Linux (Wayland)**
 - A native C++20 / GLSL Liquid Glass menu bar (`mistbar-daemon`) and pure-black System Settings desktop app (`mistbar-settings`) built on Wayland (`wlr-layer-shell`, `wlr-foreign-toplevel-management`, `xdg-shell`), Cairo, Pango, `librsvg`, and OpenGL shaders.
