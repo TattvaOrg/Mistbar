@@ -419,6 +419,8 @@ struct MizzleRenderer::Impl {
             const GLint loc_opac = glGetUniformLocation(prog_glass, "uCustomOpacity");
             const GLint loc_nobd = glGetUniformLocation(prog_glass, "uNoBorder");
             const GLint loc_dir  = glGetUniformLocation(prog_glass, "uDirectGlass");
+            const GLint loc_bez  = glGetUniformLocation(prog_glass, "uBezel");
+            const GLint loc_shd  = glGetUniformLocation(prog_glass, "uShaderMode");
 
             for (const auto& p : panels) {
                 if (p.w <= 1.0f || p.h <= 1.0f) continue;
@@ -435,6 +437,8 @@ struct MizzleRenderer::Impl {
                 glUniform1f(loc_opac, p.customOpacity);
                 glUniform1f(loc_nobd, p.noBorder ? 1.0f : 0.0f);
                 glUniform1f(loc_dir, p.directGlass ? 1.0f : 0.0f);
+                glUniform1f(loc_bez, m.bezel);
+                glUniform1f(loc_shd, m.shaderMode);
                 draw_quad();
             }
         }
@@ -900,6 +904,8 @@ GlassMaterial make_glass_material(const MaterialConfigInput& in) {
     m.specular   = std::clamp(in.specular_intensity * 2.0f, 0.0f, 2.0f);
     m.tintAlpha  = std::clamp(in.tint_opacity, 0.0f, 0.65f);
     m.blurScale  = 1.05f + m.frost * 1.10f;
+    m.bezel      = std::clamp(in.bezel_thickness, 0.0f, 1.0f);
+    m.shaderMode = (in.shader_style == "overshifted") ? 1.0f : 0.0f;
 
     if (in.glass_preset == "smoked" || in.glass_preset == "dark") {
         m.tintR       = 0.09f;

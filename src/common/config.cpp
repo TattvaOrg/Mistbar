@@ -116,6 +116,13 @@ MistbarConfig load_config() {
     }
     cfg.glass_preset = preset;
 
+    std::string sh = j.get_string("shaderStyle", cfg.shader_style);
+    if (sh == "overshifted" || sh == "liquidglass" || sh == "liquid-glass") {
+        cfg.shader_style = "overshifted";
+    } else {
+        cfg.shader_style = "mizzle";
+    }
+
     cfg.look = j.get_string("look", cfg.look);
     if (cfg.look != "pill" && cfg.look != "attached") {
         cfg.look = "attached";
@@ -175,6 +182,7 @@ bool save_config(const MistbarConfig& cfg) {
     json::Object obj;
     obj["theme"]               = cfg.theme;
     obj["glassPreset"]         = cfg.glass_preset;
+    obj["shaderStyle"]         = cfg.shader_style;
     obj["look"]                = cfg.look;
     obj["iconStyle"]           = cfg.icon_style;
     obj["accentColor"]         = cfg.accent_color;

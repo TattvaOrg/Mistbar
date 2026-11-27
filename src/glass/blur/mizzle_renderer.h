@@ -24,6 +24,8 @@ struct GlassMaterial {
     float tintAlpha   = 0.08f;
     float shadowAlpha = 0.14f;
     float blurScale   = 1.35f;
+    float bezel       = 0.38f;
+    float shaderMode  = 0.0f; // 0.0 = TattvaOrg/mizzle, 1.0 = OverShifted/LiquidGlass
 };
 
 struct GlassPanelSpec {
@@ -121,6 +123,8 @@ struct MaterialConfigInput {
     float specular_intensity = 0.48f;
     float tint_opacity = 0.08f;
     float glass_opacity = 0.85f;
+    float bezel_thickness = 0.38f;
+    std::string shader_style = "mizzle";
 };
 GlassMaterial make_glass_material(const MaterialConfigInput& in);
 

@@ -7,6 +7,7 @@
 #include "common/sysinfo.h"
 #include "common/wayland_client.h"
 #include "glass/blur/gaussian_blur.h"
+#include "glass/blur/mizzle_renderer.h"
 #include "glass/specular/specular.h"
 #include "glass/translucent/glass_panel.h"
 #include "themes/theme.h"
@@ -16,7 +17,9 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <csignal>
 #include <cstring>
 #include <filesystem>
@@ -60,39 +63,45 @@ std::string to_lower_copy(std::string s) {
 void draw_tonal_wallpaper(cairo_t* cr, double pw, double ph, bool dark) {
     cairo_pattern_t* base = cairo_pattern_create_linear(0.0, 0.0, pw, ph);
     if (dark) {
-        cairo_pattern_add_color_stop_rgb(base, 0.0, 0.07, 0.11, 0.20);
-        cairo_pattern_add_color_stop_rgb(base, 0.55, 0.10, 0.16, 0.28);
-        cairo_pattern_add_color_stop_rgb(base, 1.0, 0.06, 0.08, 0.14);
+        cairo_pattern_add_color_stop_rgb(base, 0.0, 0.06, 0.12, 0.24);
+        cairo_pattern_add_color_stop_rgb(base, 0.45, 0.12, 0.24, 0.44);
+        cairo_pattern_add_color_stop_rgb(base, 1.0, 0.06, 0.09, 0.17);
     } else {
-        cairo_pattern_add_color_stop_rgb(base, 0.0, 0.62, 0.76, 0.92);
-        cairo_pattern_add_color_stop_rgb(base, 0.55, 0.74, 0.84, 0.95);
-        cairo_pattern_add_color_stop_rgb(base, 1.0, 0.56, 0.68, 0.86);
+        cairo_pattern_add_color_stop_rgb(base, 0.0, 0.48, 0.68, 0.92);
+        cairo_pattern_add_color_stop_rgb(base, 0.50, 0.76, 0.85, 0.96);
+        cairo_pattern_add_color_stop_rgb(base, 1.0, 0.42, 0.58, 0.84);
     }
     cairo_set_source(cr, base);
     cairo_paint(cr);
     cairo_pattern_destroy(base);
 
     cairo_pattern_t* bloom = cairo_pattern_create_radial(
-        pw * 0.62, ph * 0.42, 8.0, pw * 0.62, ph * 0.42, std::max(pw, ph) * 0.65);
+        pw * 0.72, ph * 0.46, 8.0, pw * 0.72, ph * 0.46, std::max(pw, ph) * 0.55);
     if (dark) {
-        cairo_pattern_add_color_stop_rgba(bloom, 0.0, 0.22, 0.46, 0.78, 0.44);
+        cairo_pattern_add_color_stop_rgba(bloom, 0.0, 0.26, 0.58, 0.94, 0.52);
         cairo_pattern_add_color_stop_rgba(bloom, 1.0, 0.00, 0.00, 0.00, 0.0);
     } else {
-        cairo_pattern_add_color_stop_rgba(bloom, 0.0, 0.98, 0.99, 1.00, 0.52);
+        cairo_pattern_add_color_stop_rgba(bloom, 0.0, 1.00, 0.96, 0.88, 0.58);
         cairo_pattern_add_color_stop_rgba(bloom, 1.0, 0.00, 0.00, 0.00, 0.0);
     }
     cairo_set_source(cr, bloom);
     cairo_paint(cr);
     cairo_pattern_destroy(bloom);
 
-    // Soft organic coastal ridge bands for glass refraction visibility without wireframe grids
-    cairo_set_source_rgba(cr, dark ? 0.04 : 0.36, dark ? 0.06 : 0.48, dark ? 0.11 : 0.66, 0.42);
+    // Sculpted coastal horizon + angled crest for clean glass lens refraction feedback
+    cairo_set_source_rgba(cr, dark ? 0.03 : 0.28, dark ? 0.06 : 0.42, dark ? 0.12 : 0.64, 0.48);
     cairo_move_to(cr, 0.0, ph * 0.74);
-    cairo_curve_to(cr, pw * 0.28, ph * 0.50, pw * 0.58, ph * 0.72, pw, ph * 0.46);
+    cairo_curve_to(cr, pw * 0.28, ph * 0.46, pw * 0.60, ph * 0.72, pw, ph * 0.42);
     cairo_line_to(cr, pw, ph);
     cairo_line_to(cr, 0.0, ph);
     cairo_close_path(cr);
     cairo_fill(cr);
+
+    cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, dark ? 0.10 : 0.22);
+    cairo_set_line_width(cr, 1.2);
+    cairo_move_to(cr, 0.0, ph * 0.74);
+    cairo_curve_to(cr, pw * 0.28, ph * 0.46, pw * 0.60, ph * 0.72, pw, ph * 0.42);
+    cairo_stroke(cr);
 }
 
 class MistbarSettingsApp {
@@ -114,6 +123,7 @@ public:
     }
 
     ~MistbarSettingsApp() {
+        preview_mizzle_.shutdown();
         if (preview_raw_) cairo_surface_destroy(preview_raw_);
         if (preview_blurred_) cairo_surface_destroy(preview_blurred_);
     }
@@ -237,6 +247,11 @@ private:
     bool preview_dark_cached_ = true;
     int preview_w_cached_ = 0;
     int preview_h_cached_ = 0;
+    mistbar::glass::MizzleRenderer preview_mizzle_;
+    bool preview_mizzle_init_tried_ = false;
+    bool slider_dirty_ = false;
+    bool slider_is_glass_ = false;
+    std::chrono::steady_clock::time_point last_live_ipc_{};
 
     mistbar::sysinfo::WifiStatus wifi_;
     mistbar::sysinfo::BluetoothStatus bt_;
@@ -260,6 +275,10 @@ private:
 
     void ensure_preview_backdrop(int pw, int ph, int blur_r, bool dark) {
         if (pw <= 0 || ph <= 0) return;
+        if (!preview_mizzle_init_tried_) {
+            preview_mizzle_init_tried_ = true;
+            preview_mizzle_.init(nullptr);
+        }
         if (!preview_raw_ || preview_w_cached_ != pw || preview_h_cached_ != ph ||
             preview_dark_cached_ != dark) {
             if (preview_raw_) cairo_surface_destroy(preview_raw_);
@@ -274,8 +293,11 @@ private:
             cairo_t* pcr = cairo_create(preview_raw_);
             draw_tonal_wallpaper(pcr, static_cast<double>(pw), static_cast<double>(ph), dark);
             cairo_destroy(pcr);
+            if (preview_mizzle_.is_available()) {
+                preview_mizzle_.set_backdrop_cairo(preview_raw_);
+            }
         }
-        if (preview_blur_cached_ != blur_r) {
+        if (!preview_mizzle_.is_available() && preview_blur_cached_ != blur_r) {
             preview_blur_cached_ = blur_r;
             const int r = std::clamp(blur_r / 2, 0, 24);
             if (!win_.backdrop().using_gpu() || !win_.backdrop().gl_engine().blur(preview_raw_, preview_blurred_, r)) {
@@ -284,7 +306,50 @@ private:
         }
     }
 
+    std::string build_live_glass_cmd() const {
+        char buf[256];
+        std::snprintf(buf, sizeof(buf),
+                      "glass_live:%s|%s|%d|%.3f|%.3f|%.3f|%.3f|%.3f|%.3f",
+                      cfg_.glass_preset.c_str(),
+                      cfg_.shader_style.c_str(),
+                      cfg_.blur_radius,
+                      cfg_.refraction_strength,
+                      cfg_.bezel_thickness,
+                      cfg_.chromatic_aberration,
+                      cfg_.specular_intensity,
+                      cfg_.tint_opacity,
+                      cfg_.glass_opacity);
+        return std::string(buf);
+    }
+
+    void push_live_drag(bool is_glass) {
+        slider_dirty_ = true;
+        slider_is_glass_ = is_glass;
+        win_.apply_config(cfg_);
+        win_.request_redraw();
+        const auto now = std::chrono::steady_clock::now();
+        const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_live_ipc_).count();
+        if (ms >= 40) {
+            last_live_ipc_ = now;
+            if (is_glass) {
+                mistbar::ipc::send_command(mistbar::ipc::default_socket_path(), build_live_glass_cmd());
+            } else {
+                mistbar::config::save_config(cfg_);
+                mistbar::ipc::send_command(mistbar::ipc::default_socket_path(), "reload");
+            }
+        }
+    }
+
+    void flush_slider_commit() {
+        if (!slider_dirty_) return;
+        slider_dirty_ = false;
+        mistbar::config::save_config(cfg_);
+        mistbar::ipc::send_command(mistbar::ipc::default_socket_path(),
+                                   slider_is_glass_ ? build_live_glass_cmd() : "reload");
+    }
+
     void save_and_reload() {
+        slider_dirty_ = false;
         mistbar::config::save_config(cfg_);
         win_.apply_config(cfg_);
         mistbar::ipc::send_command(mistbar::ipc::default_socket_path(), "reload");
@@ -409,40 +474,22 @@ private:
                             double gx, double gy, double gw, double gh, double gr,
                             const mistbar::themes::Color& fill_col) {
         const auto& pal = win_.palette();
-        const int gpw = std::max(1, static_cast<int>(std::ceil(gw)));
-        const int gph = std::max(1, static_cast<int>(std::ceil(gh)));
-        if (!pal.solid_mode && win_.backdrop().using_gpu() && preview_blurred_) {
-            cairo_surface_t* psurf = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, gpw, gph);
-            mistbar::glass::LiquidGlassParams lp;
-            lp.corner_radius = gr;
-            lp.refraction_strength = pal.refraction_strength;
-            lp.bezel_thickness = pal.bezel_thickness;
-            lp.chromatic_aberration = pal.chromatic_aberration;
-            lp.specular_intensity = pal.specular_intensity;
-            lp.tint_r = fill_col.r;
-            lp.tint_g = fill_col.g;
-            lp.tint_b = fill_col.b;
-            lp.tint_opacity = fill_col.a;
-            lp.glass_opacity = pal.glass_opacity;
-            lp.pointer_x = preview_ptr_x_;
-            lp.pointer_y = preview_ptr_y_;
-            lp.cursor_reactive = false;
-            lp.dark_mode = pal.dark_mode;
-            lp.overlay_only = false;
-            if (win_.backdrop().gl_engine().render_liquid_glass(
-                    preview_blurred_, static_cast<int>(gx - cx), static_cast<int>(gy - ry), psurf, lp)) {
-                cairo_save(cr);
-                cairo_set_source_surface(cr, psurf, gx, gy);
-                cairo_paint(cr);
-                cairo_restore(cr);
-                cairo_surface_destroy(psurf);
-                return;
-            }
-            cairo_surface_destroy(psurf);
+        cairo_save(cr);
+        mistbar::glass::append_rounded_rect(cr, gx, gy, gw, gh, gr);
+        cairo_clip(cr);
+        if (!pal.solid_mode && preview_blurred_) {
+            cairo_set_source_surface(cr, preview_blurred_, cx, ry);
+            cairo_paint_with_alpha(cr, pal.glass_opacity);
         }
-        mistbar::glass::draw_glass_panel(cr, &win_.backdrop(), gx, gy, gx - cx, gy - ry,
-                                         gw, gh, gr, pal, &fill_col, false,
-                                         preview_ptr_x_, preview_ptr_y_);
+        cairo_set_source_rgba(cr, fill_col.r, fill_col.g, fill_col.b, fill_col.a);
+        cairo_paint(cr);
+        if (!pal.solid_mode) {
+            cairo_set_source_rgba(cr, pal.glass_tint.r, pal.glass_tint.g,
+                                  pal.glass_tint.b, pal.glass_tint.a * 0.5);
+            cairo_paint(cr);
+        }
+        cairo_restore(cr);
+        mistbar::glass::draw_glass_specular_and_border(cr, gx, gy, gw, gh, gr, pal, preview_ptr_x_);
     }
 
     void draw_theme_thumbnail(cairo_t* cr, double bx, double ty, double tw, double th,
@@ -947,28 +994,115 @@ private:
                 cairo_set_source_surface(cr, preview_raw_, cx, ry);
                 cairo_paint(cr);
             }
+            const int prev_w = std::max(1, static_cast<int>(std::ceil(cw)));
+            const int prev_h = 132;
             const double bar_w = (cfg_.look == "pill") ? (cw - 24.0) : cw;
             const double bar_h = std::clamp(static_cast<double>(cfg_.bar_height), 22.0, 44.0);
             const double bar_x = cx + (cw - bar_w) * 0.5;
             const double bar_y = ry + ((cfg_.look == "pill") ? 10.0 : 0.0);
             const double bar_r = (cfg_.look == "pill") ? static_cast<double>(cfg_.border_radius) : 0.0;
-            draw_preview_glass(cr, cx, ry, bar_x, bar_y, bar_w, bar_h, bar_r, pal.bar_bg);
-
+            const double pill_pw = 166.0;
+            const double pill_ph = 46.0;
+            const double pill_px = cx + cw - pill_pw - 22.0;
+            const double pill_py = ry + 62.0;
             const mistbar::themes::Color bar_ink = (cfg_.glassy_text_color == "dark")
                 ? mistbar::themes::Color{0.08, 0.10, 0.14, 0.96}
                 : mistbar::themes::Color{0.96, 0.98, 1.00, 0.96};
-            mistbar::window::draw_pango_text_centered(cr, "Finder", bar_x + 16.0, bar_y, 60.0, bar_h, 9.4, true, bar_ink);
-            mistbar::window::draw_pango_text_centered(cr, "File   Edit   View   Go", bar_x + 74.0, bar_y, 190.0, bar_h, 9.0, false, bar_ink);
-            mistbar::window::draw_pango_text_centered(cr, "9:41 AM", bar_x + bar_w - 72.0, bar_y, 58.0, bar_h, 9.0, false, bar_ink, false, true);
 
-            // Sample Control Center pill inside preview
-            const double pill_pw = 160.0;
-            const double pill_ph = 44.0;
-            const double pill_px = cx + cw - pill_pw - 22.0;
-            const double pill_py = ry + 62.0;
-            draw_preview_glass(cr, cx, ry, pill_px, pill_py, pill_pw, pill_ph, 22.0, pal.panel_bg);
-            mistbar::window::draw_pango_text_centered(cr, "Control Center", pill_px + 14.0, pill_py, pill_pw - 28.0, pill_ph,
-                                                     9.2, true, bar_ink, true, false);
+            bool rendered_mizzle = false;
+            if (preview_mizzle_.is_available() && preview_mizzle_.has_backdrop()) {
+                cairo_surface_t* ui = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, prev_w, prev_h);
+                cairo_t* ucr = cairo_create(ui);
+                cairo_set_operator(ucr, CAIRO_OPERATOR_CLEAR);
+                cairo_paint(ucr);
+                cairo_set_operator(ucr, CAIRO_OPERATOR_OVER);
+                const double bx_loc = bar_x - cx;
+                const double by_loc = bar_y - ry;
+                const double px_loc = pill_px - cx;
+                const double py_loc = pill_py - ry;
+                mistbar::window::draw_pango_text_centered(ucr, "Finder", bx_loc + 16.0, by_loc, 60.0, bar_h, 9.4, true, bar_ink);
+                mistbar::window::draw_pango_text_centered(ucr, "File   Edit   View   Go", bx_loc + 74.0, by_loc, 190.0, bar_h, 9.0, false, bar_ink);
+                mistbar::window::draw_pango_text_centered(ucr, "9:41 AM", bx_loc + bar_w - 72.0, by_loc, 58.0, bar_h, 9.0, false, bar_ink, false, true);
+                mistbar::window::draw_pango_text_centered(ucr, "Control Center", px_loc + 14.0, py_loc, pill_pw - 28.0, pill_ph,
+                                                          9.2, true, bar_ink, true, false);
+                cairo_destroy(ucr);
+
+                auto mat = mistbar::glass::make_glass_material({
+                    cfg_.glass_preset,
+                    cfg_.blur_radius,
+                    cfg_.refraction_strength,
+                    cfg_.chromatic_aberration,
+                    cfg_.specular_intensity,
+                    cfg_.tint_opacity,
+                    cfg_.glass_opacity,
+                    cfg_.bezel_thickness,
+                    cfg_.shader_style
+                });
+                std::vector<mistbar::glass::GlassPanelSpec> panels;
+
+                const bool transparent_attached = (cfg_.glass_preset != "solid") && (cfg_.look == "attached") &&
+                                                  (cfg_.blur_radius <= 0);
+                mistbar::glass::GlassPanelSpec bar_p;
+                bar_p.x = static_cast<float>(bx_loc);
+                bar_p.y = static_cast<float>(by_loc);
+                bar_p.w = static_cast<float>(bar_w);
+                bar_p.h = static_cast<float>(bar_h);
+                bar_p.radius = static_cast<float>(bar_r);
+                bar_p.isPill = (cfg_.look == "pill");
+                bar_p.overrideMaterial = true;
+                bar_p.customMaterial = mat;
+                bar_p.customMaterial.shadowAlpha = 0.0f;
+                if (cfg_.look == "attached" && cfg_.glass_preset != "solid" && transparent_attached) {
+                    bar_p.customMaterial.frost = 0.0f;
+                    bar_p.customMaterial.refraction = 0.0f;
+                    bar_p.customMaterial.specular = 0.0f;
+                    bar_p.customMaterial.tintAlpha = 0.0f;
+                }
+                bar_p.customOpacity = (cfg_.glass_preset == "solid")
+                    ? 1.0f
+                    : (transparent_attached ? 0.0f : ((cfg_.look == "pill") ? 0.44f : 0.30f));
+                bar_p.noBorder = (cfg_.look == "attached");
+                bar_p.directGlass = false; // always sample preview wallpaper inside Settings preview
+                panels.push_back(bar_p);
+
+                mistbar::glass::GlassPanelSpec pill_p;
+                pill_p.x = static_cast<float>(px_loc);
+                pill_p.y = static_cast<float>(py_loc);
+                pill_p.w = static_cast<float>(pill_pw);
+                pill_p.h = static_cast<float>(pill_ph);
+                pill_p.radius = 23.0f;
+                pill_p.isPill = true;
+                pill_p.overrideMaterial = true;
+                pill_p.customMaterial = mat;
+                pill_p.customMaterial.shadowAlpha = 0.14f;
+                pill_p.customOpacity = (cfg_.glass_preset == "solid") ? 1.0f : std::clamp(cfg_.glass_opacity * 0.58f, 0.14f, 0.92f);
+                pill_p.directGlass = false;
+                panels.push_back(pill_p);
+
+                cairo_surface_t* out = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, prev_w, prev_h);
+                if (preview_mizzle_.render_to_cairo(out, 0.0f, 0.0f, 0.0f, {}, mat, panels, ui,
+                                                    cfg_.glass_preset != "solid")) {
+                    cairo_set_source_surface(cr, out, cx, ry);
+                    cairo_paint(cr);
+                    rendered_mizzle = true;
+                }
+                cairo_surface_destroy(out);
+                cairo_surface_destroy(ui);
+            }
+
+            if (!rendered_mizzle) {
+                const bool transparent_attached = (cfg_.glass_preset != "solid") && (cfg_.look == "attached") &&
+                                                  (cfg_.blur_radius <= 0);
+                if (!transparent_attached) {
+                    draw_preview_glass(cr, cx, ry, bar_x, bar_y, bar_w, bar_h, bar_r, pal.bar_bg);
+                }
+                mistbar::window::draw_pango_text_centered(cr, "Finder", bar_x + 16.0, bar_y, 60.0, bar_h, 9.4, true, bar_ink);
+                mistbar::window::draw_pango_text_centered(cr, "File   Edit   View   Go", bar_x + 74.0, bar_y, 190.0, bar_h, 9.0, false, bar_ink);
+                mistbar::window::draw_pango_text_centered(cr, "9:41 AM", bar_x + bar_w - 72.0, bar_y, 58.0, bar_h, 9.0, false, bar_ink, false, true);
+                draw_preview_glass(cr, cx, ry, pill_px, pill_py, pill_pw, pill_ph, 23.0, pal.panel_bg);
+                mistbar::window::draw_pango_text_centered(cr, "Control Center", pill_px + 14.0, pill_py, pill_pw - 28.0, pill_ph,
+                                                          9.2, true, bar_ink, true, false);
+            }
             cairo_restore(cr);
 
             mistbar::glass::append_rounded_rect(cr, cx + 0.5, ry + 0.5, cw - 1.0, 131.0, 12.0);
@@ -978,9 +1112,19 @@ private:
             cairo_stroke(cr);
             ry += 146.0;
 
-            draw_section_label("Material Preset");
+            draw_section_label("Shader & Material");
             draw_grouped_card({
-                {"Material Style", "Select glass or opaque Solid",
+                {"Shader Engine", "Mizzle fluid or OverShifted squircle",
+                 [&](cairo_t* c, double rx, double rry, double rw, double rh) {
+                     const int sact = (cfg_.shader_style == "overshifted") ? 1 : 0;
+                     draw_segmented_control(c, rx + rw - 236.0, rry + (rh - 28.0) * 0.5, 220.0, 28.0,
+                                            {"Mizzle", "LiquidGlass"}, sact, "shd",
+                                            [this](int idx) {
+                                                cfg_.shader_style = (idx == 1) ? "overshifted" : "mizzle";
+                                                save_and_reload();
+                                            }, body_top, body_bottom);
+                 }, nullptr, 56.0},
+                {"Material Style", "Select glass preset or opaque Solid",
                  [&](cairo_t* c, double rx, double rry, double rw, double rh) {
                      static const char* kIds[5] = {"clear", "frosted", "smoked", "aqua", "solid"};
                      int act = 0;
@@ -1005,28 +1149,32 @@ private:
             draw_slider_group({
                 {"Blur Radius", std::to_string(cfg_.blur_radius) + " px",
                  static_cast<double>(cfg_.blur_radius) / 48.0, 0.0, 48.0,
-                 [this](double v) { cfg_.blur_radius = static_cast<int>(std::round(v)); save_and_reload(); }},
+                 [this](double v) { cfg_.blur_radius = static_cast<int>(std::round(v)); push_live_drag(true); }},
                 {"Refraction Strength", std::to_string(static_cast<int>(std::round(cfg_.refraction_strength * 100.0f))) + "%",
                  cfg_.refraction_strength, 0.0, 1.0,
-                 [this](double v) { cfg_.refraction_strength = static_cast<float>(v); save_and_reload(); }},
+                 [this](double v) { cfg_.refraction_strength = static_cast<float>(v); push_live_drag(true); }},
+                {"Bezel Thickness", std::to_string(static_cast<int>(std::round(cfg_.bezel_thickness * 100.0f))) + "%",
+                 cfg_.bezel_thickness, 0.0, 1.0,
+                 [this](double v) { cfg_.bezel_thickness = static_cast<float>(v); push_live_drag(true); }},
                 {"Chromatic Dispersion", std::to_string(static_cast<int>(std::round(cfg_.chromatic_aberration * 100.0f))) + "%",
                  cfg_.chromatic_aberration, 0.0, 1.0,
-                 [this](double v) { cfg_.chromatic_aberration = static_cast<float>(v); save_and_reload(); }},
+                 [this](double v) { cfg_.chromatic_aberration = static_cast<float>(v); push_live_drag(true); }},
                 {"Specular Rim Shine", std::to_string(static_cast<int>(std::round(cfg_.specular_intensity * 100.0f))) + "%",
                  cfg_.specular_intensity, 0.0, 1.0,
-                 [this](double v) { cfg_.specular_intensity = static_cast<float>(v); save_and_reload(); }},
+                 [this](double v) { cfg_.specular_intensity = static_cast<float>(v); push_live_drag(true); }},
                 {"Tint Opacity", std::to_string(static_cast<int>(std::round(cfg_.tint_opacity * 100.0f))) + "%",
                  cfg_.tint_opacity, 0.0, 1.0,
-                 [this](double v) { cfg_.tint_opacity = static_cast<float>(v); save_and_reload(); }},
+                 [this](double v) { cfg_.tint_opacity = static_cast<float>(v); push_live_drag(true); }},
                 {"Glass Opacity", std::to_string(static_cast<int>(std::round(cfg_.glass_opacity * 100.0f))) + "%",
                  (cfg_.glass_opacity - 0.05) / 0.95, 0.05, 1.0,
-                 [this](double v) { cfg_.glass_opacity = static_cast<float>(v); save_and_reload(); }}
+                 [this](double v) { cfg_.glass_opacity = static_cast<float>(v); push_live_drag(true); }}
             });
 
             draw_grouped_card({
                 make_action_row("Restore Default Glass", "Reset shader preset and optical values to Clear",
                                 "Restore Defaults", false, false, "btn:reset-glass", [this]() {
                     mistbar::config::apply_glass_preset(cfg_, "clear");
+                    cfg_.shader_style = "mizzle";
                     save_and_reload();
                 })
             });
@@ -1047,13 +1195,13 @@ private:
             draw_slider_group({
                 {"Bar Height", std::to_string(cfg_.bar_height) + " px",
                  static_cast<double>(cfg_.bar_height - 22) / 22.0, 22.0, 44.0,
-                 [this](double v) { cfg_.bar_height = static_cast<int>(std::round(v)); save_and_reload(); }},
+                 [this](double v) { cfg_.bar_height = static_cast<int>(std::round(v)); push_live_drag(false); }},
                 {"Corner Radius (Pill)", std::to_string(cfg_.border_radius) + " px",
                  static_cast<double>(cfg_.border_radius) / 24.0, 0.0, 24.0,
-                 [this](double v) { cfg_.border_radius = static_cast<int>(std::round(v)); save_and_reload(); }},
+                 [this](double v) { cfg_.border_radius = static_cast<int>(std::round(v)); push_live_drag(false); }},
                 {"Top Margin (Pill)", std::to_string(cfg_.bar_margin) + " px",
                  static_cast<double>(cfg_.bar_margin) / 24.0, 0.0, 24.0,
-                 [this](double v) { cfg_.bar_margin = static_cast<int>(std::round(v)); save_and_reload(); }}
+                 [this](double v) { cfg_.bar_margin = static_cast<int>(std::round(v)); push_live_drag(false); }}
             });
 
             draw_section_label("Behavior & Clock");
@@ -1395,6 +1543,7 @@ private:
         }
         if (ev.type == mistbar::wl::PointerEvent::Type::ButtonRelease) {
             dragging_slider_idx_ = -1;
+            flush_slider_commit();
             return;
         }
         if (ev.type == mistbar::wl::PointerEvent::Type::Motion) {
