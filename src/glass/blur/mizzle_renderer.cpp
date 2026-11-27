@@ -350,9 +350,9 @@ struct MizzleRenderer::Impl {
         if (backdrop_rt.tex != 0 && up_rts[kPyramidLevels - 1].tex != 0) return;
         std::array<std::uint8_t, 16 * 16 * 4> pixels{};
         for (std::size_t i = 0; i < pixels.size(); i += 4) {
-            pixels[i + 0] = 68;  // B
-            pixels[i + 1] = 46;  // G
-            pixels[i + 2] = 32;  // R
+            pixels[i + 0] = 48;  // B (~0.19)
+            pixels[i + 1] = 36;  // G (~0.14)
+            pixels[i + 2] = 28;  // R (~0.11)
             pixels[i + 3] = 255; // A
         }
         glBindTexture(GL_TEXTURE_2D, desktop_tex);
@@ -418,6 +418,7 @@ struct MizzleRenderer::Impl {
             const GLint loc_pill = glGetUniformLocation(prog_glass, "uIsPill");
             const GLint loc_opac = glGetUniformLocation(prog_glass, "uCustomOpacity");
             const GLint loc_nobd = glGetUniformLocation(prog_glass, "uNoBorder");
+            const GLint loc_dir  = glGetUniformLocation(prog_glass, "uDirectGlass");
 
             for (const auto& p : panels) {
                 if (p.w <= 1.0f || p.h <= 1.0f) continue;
@@ -433,6 +434,7 @@ struct MizzleRenderer::Impl {
                 glUniform1f(loc_pill, p.isPill ? 1.0f : 0.0f);
                 glUniform1f(loc_opac, p.customOpacity);
                 glUniform1f(loc_nobd, p.noBorder ? 1.0f : 0.0f);
+                glUniform1f(loc_dir, p.directGlass ? 1.0f : 0.0f);
                 draw_quad();
             }
         }

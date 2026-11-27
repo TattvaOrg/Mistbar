@@ -180,6 +180,7 @@ private:
 
     // Separate floating Glass Editor / Shader Lab window state
     bool tuner_open_ = false;
+    bool live_backdrop_captured_ = false;
     int tuner_top_m_ = 60;
     int tuner_left_m_ = 18;
     int tuner_w_ = 286;
