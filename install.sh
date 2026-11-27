@@ -148,9 +148,10 @@ if [ "$TARGET_CHANNEL" = "local" ]; then
         cp -rf "$SCRIPT_DIR/CMakeLists.txt" "$SCRIPT_DIR/mistbar" "$SCRIPT_DIR/install.sh" \
                "$SCRIPT_DIR/update.sh" "$SCRIPT_DIR/uninstall.sh" "$SCRIPT_DIR/view.sh" \
                "$SCRIPT_DIR/README.md" "$SCRIPT_DIR/LICENSE" "$INSTALL_DIR/" 2>/dev/null || true
-        mkdir -p "$INSTALL_DIR/src" "$INSTALL_DIR/icons" "$INSTALL_DIR/protocols" "$INSTALL_DIR/data" "$INSTALL_DIR/tests"
+        mkdir -p "$INSTALL_DIR/src" "$INSTALL_DIR/icons" "$INSTALL_DIR/shaders" "$INSTALL_DIR/protocols" "$INSTALL_DIR/data" "$INSTALL_DIR/tests"
         cp -rf "$SCRIPT_DIR/src/." "$INSTALL_DIR/src/" 2>/dev/null || true
         cp -rf "$SCRIPT_DIR/icons/." "$INSTALL_DIR/icons/" 2>/dev/null || true
+        cp -rf "$SCRIPT_DIR/shaders/." "$INSTALL_DIR/shaders/" 2>/dev/null || true
         cp -rf "$SCRIPT_DIR/protocols/." "$INSTALL_DIR/protocols/" 2>/dev/null || true
         cp -rf "$SCRIPT_DIR/data/." "$INSTALL_DIR/data/" 2>/dev/null || true
         cp -rf "$SCRIPT_DIR/tests/." "$INSTALL_DIR/tests/" 2>/dev/null || true
@@ -174,7 +175,7 @@ else
     fi
 
     echo -e "  Fetching latest release tags and commits..."
-    git -C "$INSTALL_DIR" fetch --tags origin --quiet
+    git -C "$INSTALL_DIR" fetch origin --tags --quiet
 
     LATEST_TAG="$(git -C "$INSTALL_DIR" tag -l --sort=-v:refname | head -n 1)"
 
@@ -205,14 +206,12 @@ else
             echo -e "${GREEN}  [ok] Checked out release $LATEST_TAG${NC}"
         else
             echo -e "${YELLOW}  No release tags found, defaulting to main branch...${NC}"
-            git -C "$INSTALL_DIR" checkout main --quiet
-            git -C "$INSTALL_DIR" pull origin main --quiet
+            git -C "$INSTALL_DIR" checkout -B main origin/main --quiet
             echo -e "${GREEN}  [ok] Checked out main branch${NC}"
         fi
     elif [ "$TARGET_CHANNEL" = "main" ]; then
         echo -e "  Checking out ${BOLD}main${NC} branch (latest development)..."
-        git -C "$INSTALL_DIR" checkout main --quiet
-        git -C "$INSTALL_DIR" pull origin main --quiet
+        git -C "$INSTALL_DIR" checkout -B main origin/main --quiet
         echo -e "${GREEN}  [ok] Checked out main branch${NC}"
     fi
 fi
@@ -224,18 +223,46 @@ cmake --build "$INSTALL_DIR/build" -j
 cmake --install "$INSTALL_DIR/build"
 echo -e "${GREEN}  [ok] Compiled and installed binaries to $LOCAL_PREFIX/bin${NC}"
 
-# 3. Ensure scripts are executable & link CLI
-echo -e "${BLUE}[3/7] Linking CLI to ~/.local/bin/mistbar...${NC}"
-mkdir -p "$LOCAL_PREFIX/bin"
+# 3. Ensure scripts are executable, install desktop entry & link CLI
+echo -e "${BLUE}[3/7] Installing desktop application & linking CLI...${NC}"
+mkdir -p "$LOCAL_PREFIX/bin" "$LOCAL_PREFIX/share/applications" "$LOCAL_PREFIX/share/icons/hicolor/scalable/apps"
 chmod +x "$INSTALL_DIR/mistbar" "$INSTALL_DIR/install.sh" "$INSTALL_DIR/update.sh" "$INSTALL_DIR/uninstall.sh" "$INSTALL_DIR/view.sh"
 ln -sf "$INSTALL_DIR/mistbar" "$BIN_TARGET"
+
+DESKTOP_TARGET="$LOCAL_PREFIX/share/applications/mistbar.desktop"
+ICON_TARGET="$LOCAL_PREFIX/share/icons/hicolor/scalable/apps/mistbar.svg"
+if [ -f "$INSTALL_DIR/icons/mistbar-logo.svg" ]; then
+    cp -f "$INSTALL_DIR/icons/mistbar-logo.svg" "$ICON_TARGET"
+fi
+cat << EOF > "$DESKTOP_TARGET"
+[Desktop Entry]
+Type=Application
+Name=Mistbar
+GenericName=Menu Bar Settings
+Comment=Configure Mistbar macOS Liquid Glass top bar
+Exec=$LOCAL_PREFIX/bin/mistbar-settings
+Icon=$ICON_TARGET
+StartupWMClass=mistbar-settings
+Terminal=false
+Categories=Settings;DesktopSettings;Utility;
+StartupNotify=false
+EOF
+chmod 644 "$DESKTOP_TARGET"
+
 if command -v update-desktop-database &>/dev/null; then
     update-desktop-database "$LOCAL_PREFIX/share/applications" 2>/dev/null || true
 fi
-echo -e "${GREEN}  [ok] Symlink configured: $BIN_TARGET -> $INSTALL_DIR/mistbar${NC}"
+if command -v gtk-update-icon-cache &>/dev/null; then
+    gtk-update-icon-cache -f -t "$LOCAL_PREFIX/share/icons/hicolor" 2>/dev/null || true
+fi
+if [ ! -x "$LOCAL_PREFIX/bin/mistbar-settings" ] || [ ! -x "$LOCAL_PREFIX/bin/mistbar-daemon" ]; then
+    echo -e "${RED}Error: Expected binaries missing in $LOCAL_PREFIX/bin after cmake --install.${NC}"
+    exit 1
+fi
+echo -e "${GREEN}  [ok] Installed Mistbar app ($DESKTOP_TARGET) and CLI ($BIN_TARGET)${NC}"
 
-# 4. Check & Configure Niri Compositor Layer Blur Rule
-echo -e "${BLUE}[4/7] Checking Niri compositor blur integration...${NC}"
+# 4. Clean Up Legacy Niri Compositor Blur Rule (prevents full-box compositor blur behind applets/bar)
+echo -e "${BLUE}[4/7] Ensuring clean transparent Mistbar surfaces in Niri...${NC}"
 NIRI_CONFIG="$HOME/.config/niri/config.kdl"
 if [ -f "$NIRI_CONFIG" ]; then
     python3 -c "
@@ -277,9 +304,8 @@ def remove_mistbar_layer_rules(text):
             i = pos
     return ''.join(result)
 
-content = remove_mistbar_layer_rules(content)
-
-lines = content.splitlines(True)
+updated = remove_mistbar_layer_rules(content)
+lines = updated.splitlines(True)
 cleaned = []
 open_depth = 0
 for line in lines:
@@ -290,39 +316,25 @@ for line in lines:
     if open_depth < 0:
         open_depth = 0
     cleaned.append(line)
-content = ''.join(cleaned)
+updated = ''.join(cleaned)
 
-rule = '''
-layer-rule {
-    match namespace=\"^mistbar\"
-    geometry-corner-radius 16
-    background-effect {
-        blur true
-    }
-}
-'''
-idx = content.find('input {')
-if idx != -1:
-    new_content = content[:idx] + rule + '\n' + content[idx:]
-else:
-    new_content = content + '\n' + rule
-
-with open(kdl_path, 'w') as f:
-    f.write(new_content)
+if updated != content:
+    with open(kdl_path, 'w') as f:
+        f.write(updated)
 " 2>/dev/null || true
 
     if command -v niri &>/dev/null; then
         if niri validate 2>/dev/null; then
-            echo -e "${GREEN}  [ok] Added mistbar blur rule and verified Niri configuration${NC}"
+            echo -e "${GREEN}  [ok] Verified clean Niri configuration (no compositor blur box behind applets/bar)${NC}"
             niri msg action load-config-file 2>/dev/null || true
         else
             echo -e "${YELLOW}  [warn] Niri config validation reported an issue; please check $NIRI_CONFIG${NC}"
         fi
     else
-        echo -e "${GREEN}  [ok] Added mistbar background-effect blur rule to Niri config${NC}"
+        echo -e "${GREEN}  [ok] Removed legacy mistbar blur rule from Niri config${NC}"
     fi
 else
-    echo -e "${DIM}  Niri config not detected, skipping layer-rule setup${NC}"
+    echo -e "${DIM}  Niri config not detected, skipping Niri cleanup${NC}"
 fi
 
 # 5. Configure default auto-start on login
