@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Mistbar
+GenericName=Menu Bar Settings
+Comment=Configure Mistbar macOS Liquid Glass top bar
+Exec=mistbar-settings
+Icon=mistbar
+Terminal=false
+Categories=Settings;DesktopSettings;Utility;
+StartupNotify=false

@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" fill="none">
+  <defs>
+    <linearGradient id="bg" x1="16" y1="8" x2="112" y2="120" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#48D1FF"/>
+      <stop offset="48%" stop-color="#0A84FF"/>
+      <stop offset="100%" stop-color="#3634A3"/>
+    </linearGradient>
+    <linearGradient id="rim" x1="20" y1="8" x2="108" y2="120" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.95"/>
+      <stop offset="40%" stop-color="#FFFFFF" stop-opacity="0.24"/>
+      <stop offset="80%" stop-color="#7EE2FF" stop-opacity="0.22"/>
+      <stop offset="100%" stop-color="#FFFFFF" stop-opacity="0.68"/>
+    </linearGradient>
+    <linearGradient id="gloss" x1="64" y1="10" x2="64" y2="60" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.54"/>
+      <stop offset="100%" stop-color="#FFFFFF" stop-opacity="0.0"/>
+    </linearGradient>
+    <linearGradient id="glassCard" x1="28" y1="28" x2="100" y2="100" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.34"/>
+      <stop offset="100%" stop-color="#FFFFFF" stop-opacity="0.10"/>
+    </linearGradient>
+  </defs>
+  <rect x="6" y="6" width="116" height="116" rx="28" fill="url(#bg)"/>
+  <circle cx="92" cy="92" r="28" fill="#64D2FF" fill-opacity="0.28"/>
+  <circle cx="34" cy="34" r="24" fill="#FFFFFF" fill-opacity="0.16"/>
+  <path d="M34 9 H94 C107 9 118 20 118 33 V46 C94 58 34 58 10 46 V33 C10 20 21 9 34 9 Z" fill="url(#gloss)"/>
+  <rect x="23" y="23" width="82" height="82" rx="20" fill="url(#glassCard)" stroke="#FFFFFF" stroke-opacity="0.45" stroke-width="1.5"/>
+  <path d="M40 84 V46 C40 41.2 46.0 39.2 49.0 43.0 L64 62.2 L79.0 43.0 C82.0 39.2 88 41.2 88 46 V84" stroke="#FFFFFF" stroke-width="9.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M40 84 V46 C40 41.2 46.0 39.2 49.0 43.0 L64 62.2 L79.0 43.0 C82.0 39.2 88 41.2 88 46 V84" stroke="#CBEFFF" stroke-opacity="0.55" stroke-width="2.0" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="7" y="7" width="114" height="114" rx="27" stroke="url(#rim)" stroke-width="2.2"/>
+</svg>
