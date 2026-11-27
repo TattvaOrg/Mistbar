@@ -185,7 +185,7 @@ void MistbarWindow::handle_draw(cairo_t* cr, int total_w, int total_h) {
             cairo_restore(cr);
         }
         // Traffic lights integrated into top-left of floating sidebar
-        traffic_lights_.draw(cr, icon_cache_, wx + 22.0, wy + 22.0, active);
+        traffic_lights_.draw(cr, icon_cache_, wx + 22.0, wy + 22.0, active, dim_min_max_);
     } else {
         const double tb_h = static_cast<double>(defaults::TITLEBAR_HEIGHT);
         const themes::Color tb_fill = active ? palette_.titlebar_active : palette_.titlebar_inactive;
@@ -198,7 +198,7 @@ void MistbarWindow::handle_draw(cairo_t* cr, int total_w, int total_h) {
 
         const double tl_x = wx + 14.0;
         const double tl_y = wy + (tb_h - static_cast<double>(defaults::TRAFFIC_LIGHT_SIZE)) * 0.5;
-        traffic_lights_.draw(cr, icon_cache_, tl_x, tl_y, active);
+        traffic_lights_.draw(cr, icon_cache_, tl_x, tl_y, active, dim_min_max_);
 
         themes::Color title_col = palette_.text_primary;
         if (!active) title_col.a *= 0.55;

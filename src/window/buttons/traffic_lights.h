@@ -21,7 +21,8 @@ public:
               icons::IconCache& icon_cache,
               double origin_x,
               double origin_y,
-              bool window_active) const;
+              bool window_active,
+              bool dim_min_max = false) const;
 
     double cluster_width() const noexcept;
 
