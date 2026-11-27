@@ -71,6 +71,7 @@ public:
     void set_close_callback(CloseFn fn) { on_close_ = std::move(fn); }
 
     void set_title(const std::string& title);
+    void set_dim_min_max(bool dim) noexcept { dim_min_max_ = dim; }
     void request_redraw();
     bool is_open() const noexcept { return open_; }
     void close();
@@ -91,6 +92,7 @@ private:
     std::string title_;
     int shadow_margin_ = 16;
     bool headless_titlebar_ = false;
+    bool dim_min_max_ = false;
     bool open_ = false;
     std::chrono::steady_clock::time_point last_click_time_{};
 

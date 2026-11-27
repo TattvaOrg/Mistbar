@@ -65,7 +65,8 @@ void TrafficLights::draw(cairo_t* cr,
                          icons::IconCache& icon_cache,
                          double origin_x,
                          double origin_y,
-                         bool window_active) const {
+                         bool window_active,
+                         bool dim_min_max) const {
     const double d = static_cast<double>(defaults::TRAFFIC_LIGHT_SIZE);
     const double r = d * 0.5;
     const double step = d + static_cast<double>(defaults::TRAFFIC_LIGHT_GAP);
@@ -85,7 +86,8 @@ void TrafficLights::draw(cairo_t* cr,
         const double cx = origin_x + r + static_cast<double>(i) * step;
         const double cy = origin_y + r;
 
-        const bool show_color = window_active || cluster_hovered_;
+        const bool dimmed_slot = dim_min_max && (i > 0) && !cluster_hovered_;
+        const bool show_color = !dimmed_slot && (window_active || cluster_hovered_);
         const std::uint32_t fill = show_color ? colors[i] : defaults::COLOR_INACTIVE;
 
         cairo_save(cr);
