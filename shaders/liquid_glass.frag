@@ -19,6 +19,8 @@ uniform float uShadowAlpha;
 uniform float uIsPill;
 uniform float uTime;
 uniform vec4 uClick; // (clickX, clickY, ageSec, activeFlag >0.5)
+uniform float uTranslucentGlass;
+uniform float uCustomOpacity;
 
 float sdRoundedBox(vec2 p, vec2 b, float r) {
     vec2 q = abs(p) - b + vec2(r);
@@ -185,7 +187,13 @@ void main() {
     float rimAlpha = razorRim * (0.14 + 0.48 * diagShine) * uSpecular;
     glassColor = mix(glassColor, vec3(0.97, 0.99, 1.0), clamp(rimAlpha, 0.0, 0.68));
 
-    vec3 outRgb = mix(vec3(0.0), clamp(glassColor, 0.0, 1.0), bodyMask);
-    float outAlpha = max(bodyMask, shadow * (1.0 - bodyMask));
+    float baseTranslucent = (uCustomOpacity >= 0.0)
+        ? uCustomOpacity
+        : clamp(0.32 + uFrost * 0.34 + uTintColor.a * 0.62 + rimCurve * 0.30 + razorRim * 0.45, 0.26, 0.90);
+    float panelAlpha = mix(1.0, baseTranslucent, clamp(uTranslucentGlass, 0.0, 1.0));
+
+    vec3 clampedGlass = clamp(glassColor, 0.0, 1.0) * panelAlpha;
+    vec3 outRgb = mix(vec3(0.0), clampedGlass, bodyMask);
+    float outAlpha = bodyMask * panelAlpha + shadow * (1.0 - bodyMask);
     fragColor = vec4(outRgb, outAlpha);
 }

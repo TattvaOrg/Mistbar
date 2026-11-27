@@ -317,7 +317,6 @@ void Surface::render_now() {
     }
     if (on_egl_draw_) {
         wl_surface_set_buffer_scale(wl_surface_, scale_);
-        schedule_frame_callback();
         if (on_egl_draw_(wl_surface_, width_, height_, scale_)) {
             redraw_pending_ = false;
             return;

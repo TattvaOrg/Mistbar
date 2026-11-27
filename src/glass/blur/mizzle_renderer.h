@@ -35,6 +35,7 @@ struct GlassPanelSpec {
     bool isPill = false;
     bool overrideMaterial = false;
     GlassMaterial customMaterial{};
+    float customOpacity = -1.0f;
 };
 
 struct ClickPulse {
@@ -84,7 +85,8 @@ public:
                         const ClickPulse& click,
                         const GlassMaterial& material,
                         const std::vector<GlassPanelSpec>& panels,
-                        cairo_surface_t* ui_overlay);
+                        cairo_surface_t* ui_overlay,
+                        bool translucent_glass = false);
 
     // Offscreen render into a Cairo ARGB32 surface (used for --dump-png, tests, and SHM fallback).
     bool render_to_cairo(cairo_surface_t* dst,
@@ -94,7 +96,8 @@ public:
                          const ClickPulse& click,
                          const GlassMaterial& material,
                          const std::vector<GlassPanelSpec>& panels,
-                         cairo_surface_t* ui_overlay = nullptr);
+                         cairo_surface_t* ui_overlay = nullptr,
+                         bool translucent_glass = false);
 
 private:
     struct Impl;

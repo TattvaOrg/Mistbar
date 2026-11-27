@@ -83,12 +83,19 @@ int main(int argc, char** argv) {
     auto last_1s = std::chrono::steady_clock::now();
 
     while (!should_quit && !g_stop_requested) {
+        const auto now_pre = std::chrono::steady_clock::now();
+        if (std::chrono::duration_cast<std::chrono::milliseconds>(now_pre - last_1s).count() >= 1000) {
+            last_1s = now_pre;
+            app.refresh_clock_only();
+        }
+
+        const bool animating = app.tick();
+
         if (!display.prepare_and_flush()) {
             mistbar::log::warn("bar", "Wayland prepare_and_flush failed; exiting");
             break;
         }
 
-        const bool animating = app.tick();
         const int timeout_ms = animating ? 16 : 500;
         pollfd pfds[3]{
             {display.fd(), POLLIN, 0},
@@ -121,12 +128,6 @@ int main(int argc, char** argv) {
                     app.apply_worker_updates();
                 }
             }
-        }
-
-        const auto now = std::chrono::steady_clock::now();
-        if (std::chrono::duration_cast<std::chrono::milliseconds>(now - last_1s).count() >= 1000) {
-            last_1s = now;
-            app.refresh_clock_only();
         }
     }
 

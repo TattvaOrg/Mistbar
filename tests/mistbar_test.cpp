@@ -77,9 +77,10 @@ void test_mizzle_renderer_offscreen() {
         cairo_surface_t* ui = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 128, 128);
         cairo_surface_t* out = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 128, 128);
         std::vector<mistbar::glass::GlassPanelSpec> panels;
-        panels.push_back({10.0f, 10.0f, 108.0f, 44.0f, 22.0f, true, false, {}});
+        panels.push_back({10.0f, 10.0f, 108.0f, 44.0f, 22.0f, true, false, {}, 0.50f});
         auto mat = mistbar::glass::make_glass_material({"clear", 12, 0.65f, 0.46f, 0.50f, 0.08f, 0.82f});
-        MISTBAR_CHECK(mr.render_to_cairo(out, 0.0f, 0.0f, 0.0f, {}, mat, panels, ui));
+        MISTBAR_CHECK(mr.render_to_cairo(out, 0.0f, 0.0f, 0.0f, {}, mat, panels, ui, false));
+        MISTBAR_CHECK(mr.render_to_cairo(out, 0.0f, 0.0f, 0.0f, {}, mat, panels, ui, true));
 
         cairo_surface_destroy(out);
         cairo_surface_destroy(ui);

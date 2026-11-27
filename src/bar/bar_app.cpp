@@ -82,6 +82,55 @@ void draw_cc_sun_glyph(cairo_t* cr, double cx, double cy, double sz, const theme
     cairo_restore(cr);
 }
 
+void draw_cc_wifi_glyph(cairo_t* cr, double cx, double cy, double sz, const themes::Color& col) {
+    constexpr double kPi = 3.14159265358979323846;
+    cairo_save(cr);
+    cairo_new_path(cr);
+    cairo_set_source_rgba(cr, col.r, col.g, col.b, col.a);
+    cairo_set_line_cap(cr, CAIRO_LINE_CAP_ROUND);
+    cairo_set_line_width(cr, sz * 0.13);
+    for (int i = 0; i < 3; ++i) {
+        const double rad = sz * (0.25 + static_cast<double>(i) * 0.21);
+        cairo_new_sub_path(cr);
+        cairo_arc(cr, cx, cy + sz * 0.28, rad, -kPi * 0.78, -kPi * 0.22);
+        cairo_stroke(cr);
+    }
+    cairo_new_sub_path(cr);
+    cairo_arc(cr, cx, cy + sz * 0.30, sz * 0.085, 0.0, 2.0 * kPi);
+    cairo_fill(cr);
+    cairo_restore(cr);
+}
+
+void draw_cc_bt_glyph(cairo_t* cr, double cx, double cy, double sz, const themes::Color& col) {
+    cairo_save(cr);
+    cairo_new_path(cr);
+    cairo_set_source_rgba(cr, col.r, col.g, col.b, col.a);
+    cairo_set_line_width(cr, sz * 0.12);
+    cairo_set_line_cap(cr, CAIRO_LINE_CAP_ROUND);
+    cairo_set_line_join(cr, CAIRO_LINE_JOIN_ROUND);
+    const double s = sz * 0.40;
+    cairo_move_to(cr, cx - s * 0.52, cy - s * 0.42);
+    cairo_line_to(cr, cx + s * 0.52, cy + s * 0.42);
+    cairo_line_to(cr, cx, cy + s * 0.92);
+    cairo_line_to(cr, cx, cy - s * 0.92);
+    cairo_line_to(cr, cx + s * 0.52, cy - s * 0.42);
+    cairo_line_to(cr, cx - s * 0.52, cy + s * 0.42);
+    cairo_stroke(cr);
+    cairo_restore(cr);
+}
+
+void draw_cc_moon_glyph(cairo_t* cr, double cx, double cy, double sz, const themes::Color& col) {
+    constexpr double kPi = 3.14159265358979323846;
+    cairo_save(cr);
+    cairo_new_path(cr);
+    cairo_set_source_rgba(cr, col.r, col.g, col.b, col.a);
+    cairo_arc(cr, cx, cy, sz * 0.36, 0.35, 2.0 * kPi - 0.75);
+    cairo_arc_negative(cr, cx + sz * 0.18, cy - sz * 0.12, sz * 0.26, 2.0 * kPi - 0.45, 0.75);
+    cairo_close_path(cr);
+    cairo_fill(cr);
+    cairo_restore(cr);
+}
+
 std::string resolve_sibling_binary(const std::string& name) {
     std::error_code ec;
     char buf[4096]{};
@@ -629,10 +678,13 @@ bool BarApp::init() {
 
     const bool is_pill = (cfg_.look == "pill");
     const std::uint32_t anchors = wl::LayerSurface::Top | wl::LayerSurface::Left | wl::LayerSurface::Right;
-    const int excl = cfg_.auto_hide ? -1 : (cfg_.bar_height + (is_pill ? cfg_.bar_margin : 0));
+    const int top_m = is_pill ? cfg_.bar_margin : 0;
+    const int side_m = is_pill ? defaults::BAR_SIDE_MARGIN : 0;
+    const int excl = cfg_.auto_hide ? -1 : (cfg_.bar_height + top_m);
 
     if (!bar_surface_->create("mistbar", wl::LayerSurface::Layer::Top, anchors,
-                              0, cfg_.bar_height, excl, wl::LayerSurface::KeyboardMode::None)) {
+                              0, cfg_.bar_height, excl, wl::LayerSurface::KeyboardMode::None,
+                              nullptr, top_m, side_m, 0, side_m)) {
         return false;
     }
 
@@ -663,8 +715,10 @@ bool BarApp::init() {
     cached_full_date_ = format_full_date_str();
     cached_active_app_ = "Finder";
 
-    apply_geometry();
-    update_visibility();
+    slide_anim_.snap(cfg_.auto_hide ? 0.0 : 1.0);
+    if (!cfg_.auto_hide) {
+        bar_surface_->set_visible(true);
+    }
     start_worker();
     trigger_async_refresh(true);
     return true;
@@ -748,6 +802,26 @@ void BarApp::update_visibility() {
 }
 
 bool BarApp::tick() {
+    if (pending_pop_op_ != PendingPopOp::None) {
+        const PendingPopOp op = pending_pop_op_;
+        const PopoverKind kind = pending_pop_kind_;
+        const double ax = pending_pop_anchor_x_;
+        const std::string menu = std::move(pending_pop_menu_name_);
+        pending_pop_op_ = PendingPopOp::None;
+        pending_pop_menu_name_.clear();
+
+        if (op == PendingPopOp::Close) {
+            close_popover();
+        } else if (op == PendingPopOp::Open) {
+            open_popover(kind, ax, menu);
+        } else if (op == PendingPopOp::RecaptureAndOpenTuner) {
+            close_popover();
+            display_.roundtrip();
+            capture_live_backdrop(true);
+            open_popover(PopoverKind::ShaderTuner, ax);
+        }
+    }
+
     if (grace_active_ && cfg_.auto_hide && !manually_hidden_) {
         const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
                                  std::chrono::steady_clock::now() - grace_start_).count();
@@ -824,6 +898,22 @@ void BarApp::launch_settings(const std::string& page) {
     } else {
         sysinfo::spawn_detached({bin, "--page", page});
     }
+}
+
+void BarApp::queue_open_popover(PopoverKind kind, double anchor_x, const std::string& menu_name) {
+    pending_pop_op_ = PendingPopOp::Open;
+    pending_pop_kind_ = kind;
+    pending_pop_anchor_x_ = anchor_x;
+    pending_pop_menu_name_ = menu_name;
+}
+
+void BarApp::queue_close_popover() {
+    pending_pop_op_ = PendingPopOp::Close;
+}
+
+void BarApp::queue_recapture_and_open_tuner(double anchor_x) {
+    pending_pop_op_ = PendingPopOp::RecaptureAndOpenTuner;
+    pending_pop_anchor_x_ = anchor_x;
 }
 
 void BarApp::close_popover() {
@@ -924,7 +1014,7 @@ void BarApp::open_popover(PopoverKind kind, double anchor_x, const std::string& 
         case PopoverKind::Volume:        popover_w_ = 280; popover_h_ = 158 + static_cast<int>(std::max<std::size_t>(cached_audio_.sinks.size(), 1)) * 32; break;
         case PopoverKind::Brightness:    popover_w_ = 268; popover_h_ = 148; break;
         case PopoverKind::Battery:       popover_w_ = 264; popover_h_ = 170; break;
-        case PopoverKind::ControlCenter: popover_w_ = 248; popover_h_ = 412; break;
+        case PopoverKind::ControlCenter: popover_w_ = 248; popover_h_ = 408; break;
         case PopoverKind::Spotlight:
             popover_w_ = 480;
             popover_h_ = 54 + static_cast<int>(std::min<std::size_t>(spotlight_matches_.size(), 7)) * 38 + 14;
@@ -1001,6 +1091,7 @@ std::vector<glass::GlassPanelSpec> BarApp::collect_bar_panels(int w, int h, int 
     p.isPill = (cfg_.look == "pill");
     p.overrideMaterial = true;
     p.customMaterial = current_bar_material();
+    p.customOpacity = (cfg_.glass_preset == "solid") ? 1.0f : ((cfg_.look == "pill") ? 0.44f : 0.34f);
     return {p};
 }
 
@@ -1011,7 +1102,7 @@ std::vector<glass::GlassPanelSpec> BarApp::collect_popover_panels(int total_w, i
     const float pw = std::max(1.0f, static_cast<float>(total_w) - 2.0f * m);
     const float ph = std::max(1.0f, static_cast<float>(total_h) - 2.0f * m);
 
-    auto push_panel = [&](float x, float y, float w, float h, float r, bool is_pill) {
+    auto push_panel = [&](float x, float y, float w, float h, float r, bool is_pill, float opacity) {
         glass::GlassPanelSpec spec;
         spec.x = x * sc;
         spec.y = y * sc;
@@ -1019,34 +1110,35 @@ std::vector<glass::GlassPanelSpec> BarApp::collect_popover_panels(int total_w, i
         spec.h = h * sc;
         spec.radius = r * sc;
         spec.isPill = is_pill;
+        spec.customOpacity = (cfg_.glass_preset == "solid") ? 1.0f : opacity;
         panels.push_back(spec);
     };
 
     if (open_popover_ == PopoverKind::ControlCenter) {
         // Slim mizzle Control Center: every pill & circle is an independent floating glass lens
-        push_panel(m + 0.0f,   m + 0.0f,   120.0f, 44.0f, 22.0f, true);  // Wi-Fi
-        push_panel(m + 0.0f,   m + 52.0f,  56.0f,  44.0f, 22.0f, true);  // Bluetooth
-        push_panel(m + 64.0f,  m + 52.0f,  56.0f,  44.0f, 22.0f, true);  // AirDrop
-        push_panel(m + 128.0f, m + 0.0f,   120.0f, 96.0f, 20.0f, true);  // Media card
-        push_panel(m + 0.0f,   m + 104.0f, 120.0f, 44.0f, 22.0f, true);  // Focus
-        push_panel(m + 128.0f, m + 104.0f, 56.0f,  44.0f, 22.0f, true);  // Workspaces
-        push_panel(m + 192.0f, m + 104.0f, 56.0f,  44.0f, 22.0f, true);  // Bar Look
-        push_panel(m + 0.0f,   m + 156.0f, 248.0f, 50.0f, 22.0f, true);  // Sound
-        push_panel(m + 0.0f,   m + 214.0f, 248.0f, 50.0f, 22.0f, true);  // Display
+        push_panel(m + 0.0f,   m + 0.0f,   120.0f, 44.0f, 22.0f, true, 0.50f);  // Wi-Fi
+        push_panel(m + 0.0f,   m + 52.0f,  56.0f,  44.0f, 22.0f, true, 0.48f);  // Bluetooth
+        push_panel(m + 64.0f,  m + 52.0f,  56.0f,  44.0f, 22.0f, true, 0.48f);  // AirDrop
+        push_panel(m + 128.0f, m + 0.0f,   120.0f, 96.0f, 20.0f, true, 0.50f);  // Media card
+        push_panel(m + 0.0f,   m + 104.0f, 120.0f, 44.0f, 22.0f, true, 0.50f);  // Focus
+        push_panel(m + 128.0f, m + 104.0f, 56.0f,  44.0f, 22.0f, true, 0.48f);  // Workspaces
+        push_panel(m + 192.0f, m + 104.0f, 56.0f,  44.0f, 22.0f, true, 0.48f);  // Bar Look
+        push_panel(m + 0.0f,   m + 156.0f, 248.0f, 50.0f, 22.0f, true, 0.50f);  // Sound
+        push_panel(m + 0.0f,   m + 214.0f, 248.0f, 50.0f, 22.0f, true, 0.50f);  // Display
         for (int i = 0; i < 8; ++i) {
             const int col = i % 4;
             const int row = i / 4;
             push_panel(m + static_cast<float>(col) * 64.0f,
                        m + 272.0f + static_cast<float>(row) * 52.0f,
-                       56.0f, 44.0f, 22.0f, true);
+                       56.0f, 44.0f, 22.0f, true, 0.48f);
         }
-        push_panel(m + 76.0f, m + 380.0f, 96.0f, 26.0f, 13.0f, true);   // Edit Controls
+        push_panel(m + 76.0f, m + 380.0f, 96.0f, 24.0f, 12.0f, true, 0.48f);   // Edit Controls
         return panels;
     }
 
     const float pop_r = (open_popover_ == PopoverKind::Spotlight) ? 21.0f :
                         ((open_popover_ == PopoverKind::ShaderTuner) ? 20.0f : 18.0f);
-    push_panel(m, m, pw, ph, pop_r, open_popover_ == PopoverKind::Spotlight);
+    push_panel(m, m, pw, ph, pop_r, open_popover_ == PopoverKind::Spotlight, 0.62f);
     return panels;
 }
 
@@ -1083,6 +1175,7 @@ bool BarApp::render_bar_egl(wl_surface* surf, int w, int h, int scale) {
     click.x *= static_cast<float>(sc);
     click.y *= static_cast<float>(sc);
 
+    const bool translucent = (cfg_.glass_preset != "solid");
     return mizzle_.render_surface(
         surf, px_w, px_h,
         static_cast<float>(side_m * sc),
@@ -1090,7 +1183,8 @@ bool BarApp::render_bar_egl(wl_surface* surf, int w, int h, int scale) {
         time_sec, click,
         current_bar_material(),
         collect_bar_panels(w, h, sc),
-        bar_ui_surf_);
+        bar_ui_surf_,
+        translucent);
 }
 
 bool BarApp::render_popover_egl(wl_surface* surf, int w, int h, int scale) {
@@ -1123,6 +1217,7 @@ bool BarApp::render_popover_egl(wl_surface* surf, int w, int h, int scale) {
     click.x *= static_cast<float>(sc);
     click.y *= static_cast<float>(sc);
 
+    const bool translucent = (cfg_.glass_preset != "solid");
     return mizzle_.render_surface(
         surf, px_w, px_h,
         static_cast<float>(popover_left_m_ * sc),
@@ -1130,7 +1225,8 @@ bool BarApp::render_popover_egl(wl_surface* surf, int w, int h, int scale) {
         time_sec, click,
         current_glass_material(),
         collect_popover_panels(w, h, sc),
-        pop_ui_surf_);
+        pop_ui_surf_,
+        translucent);
 }
 
 void BarApp::render_bar_preview(cairo_t* cr, int w, int h) {
@@ -1579,31 +1675,31 @@ void BarApp::handle_bar_pointer(const wl::PointerEvent& ev) {
     for (const auto& r : bar_hits_) {
         if (ev.x >= r.x && ev.x <= r.x + r.w && ev.y >= r.y && ev.y <= r.y + r.h) {
             if (r.id == "logo") {
-                open_popover(PopoverKind::LogoMenu, r.x);
+                queue_open_popover(PopoverKind::LogoMenu, r.x);
             } else if (r.id.rfind("menu:", 0) == 0) {
-                open_popover(PopoverKind::AppMenu, r.x, r.id.substr(5));
+                queue_open_popover(PopoverKind::AppMenu, r.x, r.id.substr(5));
             } else if (r.id == "ws") {
                 sysinfo::focus_niri_workspace(r.arg_int);
                 refresh_clock_and_niri();
                 bar_surface_->request_redraw();
             } else if (r.id == "wifi") {
-                open_popover(PopoverKind::Wifi, r.x - 180.0);
+                queue_open_popover(PopoverKind::Wifi, r.x - 180.0);
             } else if (r.id == "bluetooth") {
-                open_popover(PopoverKind::Bluetooth, r.x - 180.0);
+                queue_open_popover(PopoverKind::Bluetooth, r.x - 180.0);
             } else if (r.id == "volume") {
-                open_popover(PopoverKind::Volume, r.x - 180.0);
+                queue_open_popover(PopoverKind::Volume, r.x - 180.0);
             } else if (r.id == "brightness") {
-                open_popover(PopoverKind::Brightness, r.x - 160.0);
+                queue_open_popover(PopoverKind::Brightness, r.x - 160.0);
             } else if (r.id == "battery") {
-                open_popover(PopoverKind::Battery, r.x - 160.0);
+                queue_open_popover(PopoverKind::Battery, r.x - 160.0);
             } else if (r.id == "spotlight") {
-                open_popover(PopoverKind::Spotlight, r.x);
+                queue_open_popover(PopoverKind::Spotlight, r.x);
             } else if (r.id == "cc") {
-                open_popover(PopoverKind::ControlCenter, r.x - 220.0);
+                queue_open_popover(PopoverKind::ControlCenter, r.x - 220.0);
             } else if (r.id == "clock") {
-                open_popover(PopoverKind::Calendar, r.x - 120.0);
+                queue_open_popover(PopoverKind::Calendar, r.x - 120.0);
             } else if (r.id == "power") {
-                open_popover(PopoverKind::PowerMenu, r.x - 170.0);
+                queue_open_popover(PopoverKind::PowerMenu, r.x - 170.0);
             } else if (r.id == "tray") {
                 const auto idx = static_cast<std::size_t>(r.arg_int);
                 if (idx < cached_tray_.size()) {
@@ -1613,7 +1709,7 @@ void BarApp::handle_bar_pointer(const wl::PointerEvent& ev) {
             return;
         }
     }
-    close_popover();
+    queue_close_popover();
 }
 
 void BarApp::draw_separator(cairo_t* cr, double x, double y, double w) {
@@ -1691,7 +1787,7 @@ void BarApp::render_control_center_preview(cairo_t* cr, int w, int h) {
     pop_actions_.clear();
     open_popover_ = PopoverKind::ControlCenter;
     popover_w_ = 248;
-    popover_h_ = 412;
+    popover_h_ = 408;
 
     if (!mizzle_.is_available() && mizzle_.init(nullptr)) {
         if (backdrop_.raw_wallpaper()) mizzle_.set_backdrop_cairo(backdrop_.raw_wallpaper());
@@ -1705,7 +1801,7 @@ void BarApp::render_control_center_preview(cairo_t* cr, int w, int h) {
 
         cairo_surface_t* out = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, std::max(1, w), std::max(1, h));
         if (mizzle_.render_to_cairo(out, 964.0f, 26.0f, 0.0f, {}, current_glass_material(),
-                                    collect_popover_panels(w, h, 1), ui)) {
+                                    collect_popover_panels(w, h, 1), ui, cfg_.glass_preset != "solid")) {
             cairo_set_source_surface(cr, out, 0.0, 0.0);
             cairo_paint(cr);
             cairo_surface_destroy(out);
@@ -2019,16 +2115,16 @@ void BarApp::draw_battery_popover(cairo_t* cr, int w) {
     }
 }
 
-// Slim mizzle Control Center (248x412) with floating GLSL Liquid Glass pills & real backends
+// Slim mizzle Control Center (248x408) with exact Mizzle Cairo vector glyphs & Liquid Glass pills
 void BarApp::draw_control_center(cairo_t* cr, int w) {
     (void)w;
-    const themes::Color ink = (cfg_.glassy_text_color == "dark")
+    const bool dark_ink = (cfg_.glassy_text_color == "dark");
+    const themes::Color ink = dark_ink
         ? themes::Color{0.08, 0.10, 0.14, 0.94}
         : themes::Color{0.98, 0.99, 1.00, 0.96};
-    const themes::Color sub = (cfg_.glassy_text_color == "dark")
+    const themes::Color sub = dark_ink
         ? themes::Color{0.20, 0.24, 0.30, 0.72}
-        : themes::Color{0.84, 0.89, 0.96, 0.76};
-    const std::uint32_t fg_tint = (cfg_.glassy_text_color == "dark") ? 0xFF141820U : 0xFFF5F8FCU;
+        : themes::Color{0.84, 0.89, 0.96, 0.72};
     const bool use_gpu_glass = mizzle_.is_available();
 
     auto draw_fallback_pill = [&](double x, double y, double cw, double ch, double r,
@@ -2043,50 +2139,41 @@ void BarApp::draw_control_center(cairo_t* cr, int w) {
             return;
         }
         glass::append_rounded_rect(cr, x, y, cw, ch, r);
-        cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, active ? (hov ? 0.14 : 0.09) : (hov ? 0.11 : 0.055));
+        cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, active ? (hov ? 0.16 : 0.11) : (hov ? 0.12 : 0.06));
         cairo_fill_preserve(cr);
-        cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, hov ? 0.24 : 0.13);
+        cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, hov ? 0.28 : 0.15);
         cairo_set_line_width(cr, 0.9);
         cairo_stroke(cr);
     };
 
-    auto draw_icon_circle = [&](double cx, double cy, double rad, bool active, const themes::Color& fill_col) {
-        cairo_arc(cr, cx, cy, rad, 0.0, 6.283185);
-        if (active) {
-            cairo_set_source_rgba(cr, fill_col.r, fill_col.g, fill_col.b, 0.92);
-        } else {
-            cairo_set_source_rgba(cr, ink.r, ink.g, ink.b, 0.12);
-        }
-        cairo_fill(cr);
-    };
-
-    // 1. Top-left Wi-Fi slim pill (0, 0, 120x44)
+    // 1. Top-left Wi-Fi slim pill (0, 0, 120x44) — exact Mizzle ring + vector Wi-Fi glyph
     draw_fallback_pill(0.0, 0.0, 120.0, 44.0, 22.0, "cc:wifi", cached_wifi_.enabled);
-    draw_icon_circle(22.0, 22.0, 14.0, cached_wifi_.enabled, palette_.accent);
-    {
-        const std::string p = icons::resolve_icon(cached_wifi_.enabled ? "wifi.svg" : "wifi-off.svg");
-        if (!p.empty()) icons_.draw(cr, p, 14.5, 14.5, 15.0, 15.0, cached_wifi_.enabled ? 0xFFFFFFFFU : fg_tint);
-    }
+    cairo_save(cr);
+    cairo_new_path(cr);
+    cairo_arc(cr, 22.0, 22.0, 14.0, 0.0, 6.283185);
+    cairo_set_source_rgba(cr, ink.r, ink.g, ink.b, cached_wifi_.enabled ? 0.26 : 0.10);
+    cairo_fill(cr);
+    cairo_restore(cr);
+    draw_cc_wifi_glyph(cr, 22.0, 22.0, 14.0,
+                       cached_wifi_.enabled ? themes::Color{0.35, 0.72, 1.0, 1.0} : ink);
     window::draw_pango_text_centered(cr, "Wi-Fi", 42.0, 8.0, 70.0, 15.0, 8.0, true, ink);
-    window::draw_pango_text_centered(cr, cached_wifi_.connected ? cached_wifi_.ssid : (cached_wifi_.enabled ? "On" : "Off"),
+    window::draw_pango_text_centered(cr,
+                                     cached_wifi_.connected ? cached_wifi_.ssid : (cached_wifi_.enabled ? "On" : "Off"),
                                      42.0, 22.0, 70.0, 14.0, 7.0, false, sub);
     pop_actions_.push_back({0.0, 0.0, 120.0, 44.0, "wifi_toggle", "", "cc:wifi"});
 
-    // 2. Bluetooth + AirDrop circle droplets (56x44 each)
+    // 2. Bluetooth + AirDrop circle droplets (56x44 each) — exact Mizzle vector glyphs
     draw_fallback_pill(0.0, 52.0, 56.0, 44.0, 22.0, "cc:bt", cached_bt_.powered);
-    draw_icon_circle(28.0, 74.0, 14.0, cached_bt_.powered, palette_.accent);
-    {
-        const std::string p = icons::resolve_icon(cached_bt_.powered ? "bluetooth.svg" : "bluetooth-off.svg");
-        if (!p.empty()) icons_.draw(cr, p, 20.5, 66.5, 15.0, 15.0, cached_bt_.powered ? 0xFFFFFFFFU : fg_tint);
-    }
+    draw_cc_bt_glyph(cr, 28.0, 74.0, 16.0,
+                     cached_bt_.powered ? themes::Color{0.38, 0.74, 1.0, 1.0} : ink);
     pop_actions_.push_back({0.0, 52.0, 56.0, 44.0, "bt_toggle", "", "cc:bt"});
 
     draw_fallback_pill(64.0, 52.0, 56.0, 44.0, 22.0, "cc:air", cfg_.cc_airdrop_on);
-    draw_icon_circle(92.0, 74.0, 14.0, cfg_.cc_airdrop_on, palette_.accent);
-    draw_vector_airdrop(cr, 92.0, 74.0, 16.0, cfg_.cc_airdrop_on ? themes::Color{1.0, 1.0, 1.0, 0.98} : ink);
+    draw_vector_airdrop(cr, 92.0, 74.0, 16.0,
+                        cfg_.cc_airdrop_on ? themes::Color{0.38, 0.74, 1.0, 1.0} : ink);
     pop_actions_.push_back({64.0, 52.0, 56.0, 44.0, "cc_airdrop", "", "cc:air"});
 
-    // 3. Top-right Media card (128, 0, 120x96)
+    // 3. Top-right Media card (128, 0, 120x96) — exact Mizzle tile + vector transport controls
     draw_fallback_pill(128.0, 0.0, 120.0, 96.0, 20.0, "cc:media", cached_media_.playing);
     glass::append_rounded_rect(cr, 140.0, 10.0, 34.0, 34.0, 8.0);
     if (cached_media_.playing) {
@@ -2100,60 +2187,68 @@ void BarApp::draw_control_center(cairo_t* cr, int w) {
         cairo_set_source_rgba(cr, ink.r, ink.g, ink.b, 0.14);
         cairo_fill(cr);
     }
-    {
-        const std::string p = icons::resolve_icon(cached_media_.playing ? "pause.svg" : "play.svg");
-        if (!p.empty()) icons_.draw(cr, p, 150.0, 20.0, 14.0, 14.0, cached_media_.playing ? 0xFFFFFFFFU : fg_tint);
-    }
     window::draw_pango_text_centered(cr, cached_media_.active ? cached_media_.title : "Not Playing",
                                      140.0, 49.0, 96.0, 16.0, 8.0, true, ink);
-    const char* media_icons[3] = {"prev.svg", cached_media_.playing ? "pause.svg" : "play.svg", "next.svg"};
-    const char* media_cmds[3]  = {"playerctl previous", "playerctl play-pause", "playerctl next"};
-    for (int i = 0; i < 3; ++i) {
-        const double bx = 144.0 + static_cast<double>(i) * 34.0;
-        const std::string p = icons::resolve_icon(media_icons[i]);
-        if (!p.empty()) icons_.draw(cr, p, bx, 72.0, 14.0, 14.0, fg_tint);
-        pop_actions_.push_back({bx - 6.0, 68.0, 28.0, 24.0, "exec_keep", media_cmds[i], "cc:m" + std::to_string(i)});
+
+    cairo_save(cr);
+    cairo_new_path(cr);
+    cairo_set_source_rgba(cr, ink.r, ink.g, ink.b, 0.88);
+    const double ty = 78.0;
+    cairo_move_to(cr, 158.0, ty - 5.0); cairo_line_to(cr, 150.0, ty); cairo_line_to(cr, 158.0, ty + 5.0);
+    cairo_close_path(cr); cairo_fill(cr);
+    if (cached_media_.playing) {
+        cairo_rectangle(cr, 182.0, ty - 5.5, 3.5, 11.0);
+        cairo_rectangle(cr, 189.0, ty - 5.5, 3.5, 11.0);
+        cairo_fill(cr);
+    } else {
+        cairo_move_to(cr, 183.0, ty - 6.0); cairo_line_to(cr, 194.0, ty); cairo_line_to(cr, 183.0, ty + 6.0);
+        cairo_close_path(cr); cairo_fill(cr);
     }
+    cairo_move_to(cr, 216.0, ty - 5.0); cairo_line_to(cr, 224.0, ty); cairo_line_to(cr, 216.0, ty + 5.0);
+    cairo_close_path(cr); cairo_fill(cr);
+    cairo_restore(cr);
+
+    pop_actions_.push_back({136.0, 66.0, 32.0, 26.0, "exec_keep", "playerctl previous", "cc:m0"});
+    pop_actions_.push_back({172.0, 66.0, 32.0, 26.0, "exec_keep", "playerctl play-pause", "cc:m1"});
+    pop_actions_.push_back({208.0, 66.0, 32.0, 26.0, "exec_keep", "playerctl next", "cc:m2"});
 
     // 4. Focus pill + Workspaces + Bar Look circles (y = 104)
     draw_fallback_pill(0.0, 104.0, 120.0, 44.0, 22.0, "cc:focus", cfg_.cc_focus_on);
-    draw_icon_circle(22.0, 126.0, 14.0, cfg_.cc_focus_on, themes::Color{0.58, 0.44, 0.96, 1.0});
-    {
-        const std::string p = icons::resolve_icon("moon.svg");
-        if (!p.empty()) icons_.draw(cr, p, 14.5, 118.5, 15.0, 15.0, cfg_.cc_focus_on ? 0xFFFFFFFFU : fg_tint);
-    }
-    window::draw_pango_text_centered(cr, "Focus", 42.0, 104.0, 70.0, 44.0, 8.2, true, ink);
+    draw_cc_moon_glyph(cr, 22.0, 126.0, 14.0,
+                       cfg_.cc_focus_on ? themes::Color{0.62, 0.50, 1.0, 1.0} : ink);
+    window::draw_pango_text_centered(cr, "Focus", 42.0, 104.0, 70.0, 44.0, 8.0, true, ink);
     pop_actions_.push_back({0.0, 104.0, 120.0, 44.0, "cc_focus", "", "cc:focus"});
 
     draw_fallback_pill(128.0, 104.0, 56.0, 44.0, 22.0, "cc:ws", cfg_.show_workspaces);
     draw_cc_box_icon(cr, 156.0, 126.0, cfg_.show_workspaces, false,
-                     cfg_.show_workspaces ? palette_.accent : ink);
+                     cfg_.show_workspaces ? themes::Color{0.38, 0.74, 1.0, 1.0} : ink);
     pop_actions_.push_back({128.0, 104.0, 56.0, 44.0, "ws_toggle", "", "cc:ws"});
 
     draw_fallback_pill(192.0, 104.0, 56.0, 44.0, 22.0, "cc:look", cfg_.look == "pill");
     draw_cc_box_icon(cr, 220.0, 126.0, cfg_.look == "pill", true,
-                     (cfg_.look == "pill") ? palette_.accent : ink);
+                     (cfg_.look == "pill") ? themes::Color{0.38, 0.74, 1.0, 1.0} : ink);
     pop_actions_.push_back({192.0, 104.0, 56.0, 44.0, "look_toggle", "", "cc:look"});
 
     // 5. Slim mizzle Sound & Display Slider Pills (248x50)
     auto draw_cc_slider = [&](double sy, const char* title, int pct, bool is_sound) {
         draw_fallback_pill(0.0, sy, 248.0, 50.0, 22.0, "", false);
         window::draw_pango_text_centered(cr, title, 14.0, sy + 6.0, 100.0, 16.0, 8.0, true, ink);
-        window::draw_pango_text_centered(cr, std::to_string(pct) + "%", 186.0, sy + 6.0, 48.0, 16.0,
-                                         7.4, false, sub, false, true);
 
         const double track_x = 30.0;
         const double track_y = sy + 31.0;
-        const double track_w = is_sound ? 158.0 : 190.0;
+        const double track_w = is_sound ? 166.0 : 190.0;
 
         if (is_sound) {
             draw_cc_speaker_glyph(cr, 16.0, track_y + 1.5, 11.0, ink, false);
-            draw_cc_speaker_glyph(cr, 201.0, track_y + 1.5, 11.0, ink, true);
-            cairo_arc(cr, 229.0, track_y + 1.5, 9.5, 0.0, 6.283185);
+            draw_cc_speaker_glyph(cr, 210.0, track_y + 1.5, 11.0, ink, true);
+            cairo_save(cr);
+            cairo_new_path(cr);
+            cairo_arc(cr, 231.0, track_y + 1.5, 9.5, 0.0, 6.283185);
             cairo_set_source_rgba(cr, ink.r, ink.g, ink.b, 0.14);
             cairo_fill(cr);
-            draw_vector_airdrop(cr, 229.0, track_y + 1.5, 10.0, ink);
-            pop_actions_.push_back({217.0, sy + 16.0, 26.0, 28.0, "open_vol", "", "cc:volbtn"});
+            cairo_restore(cr);
+            draw_vector_airdrop(cr, 231.0, track_y + 1.5, 10.0, ink);
+            pop_actions_.push_back({219.0, sy + 16.0, 26.0, 28.0, "open_vol", "", "cc:volbtn"});
         } else {
             draw_cc_sun_glyph(cr, 16.0, track_y + 1.5, 11.0, sub);
             draw_cc_sun_glyph(cr, 232.0, track_y + 1.5, 13.0, ink);
@@ -2169,9 +2264,12 @@ void BarApp::draw_control_center(cairo_t* cr, int w) {
         cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.94);
         cairo_fill(cr);
 
+        cairo_save(cr);
+        cairo_new_path(cr);
         cairo_arc(cr, track_x + fill_w, track_y + 1.5, 6.5, 0.0, 6.283185);
         cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.98);
         cairo_fill(cr);
+        cairo_restore(cr);
     };
 
     draw_cc_slider(156.0, "Sound", cached_audio_.muted ? 0 : cached_audio_.volume_percent, true);
@@ -2197,15 +2295,15 @@ void BarApp::draw_control_center(cairo_t* cr, int w) {
         const std::string hk = "cc:q" + std::to_string(i);
         draw_fallback_pill(qx, qy, 56.0, 44.0, 22.0, hk, q_active[i]);
         draw_vector_quick_glyph(cr, i, qx + 28.0, qy + 22.0,
-                                q_active[i] ? palette_.accent : ink);
+                                q_active[i] ? themes::Color{0.38, 0.74, 1.0, 1.0} : ink);
         pop_actions_.push_back({qx, qy, 56.0, 44.0, q_actions[i], "", hk});
     }
 
     // 7. Edit Controls pill -> opens Live Shader Lab
-    draw_fallback_pill(76.0, 380.0, 96.0, 26.0, 13.0, "cc:edit", false);
-    window::draw_pango_text_centered(cr, "Edit Controls", 76.0, 380.0, 96.0, 26.0, 7.6, true,
+    draw_fallback_pill(76.0, 380.0, 96.0, 24.0, 12.0, "cc:edit", false);
+    window::draw_pango_text_centered(cr, "Edit Controls", 76.0, 380.0, 96.0, 24.0, 7.5, true,
                                      ink, true, false);
-    pop_actions_.push_back({76.0, 380.0, 96.0, 26.0, "open_tuner", "", "cc:edit"});
+    pop_actions_.push_back({76.0, 380.0, 96.0, 24.0, "open_tuner", "", "cc:edit"});
 }
 
 void BarApp::draw_spotlight_popover(cairo_t* cr, int w) {
@@ -2451,7 +2549,7 @@ void BarApp::handle_popover_pointer(const wl::PointerEvent& ev) {
         }
         if (dragging_volume_) {
             const double sx = (open_popover_ == PopoverKind::ControlCenter) ? 30.0 : 14.0;
-            const double sw = (open_popover_ == PopoverKind::ControlCenter) ? 158.0 : (popover_w_ - 28.0);
+            const double sw = (open_popover_ == PopoverKind::ControlCenter) ? 166.0 : (popover_w_ - 28.0);
             cached_audio_.volume_percent = slider_pct(lx, sx, sw);
             cached_audio_.muted = false;
             apply_hw_throttled(true, cached_audio_.volume_percent, false);
@@ -2478,7 +2576,7 @@ void BarApp::handle_popover_pointer(const wl::PointerEvent& ev) {
     }
 
     if (lx < 0.0 || ly < 0.0 || lx > popover_w_ || ly > popover_h_) {
-        close_popover();
+        queue_close_popover();
         return;
     }
 
@@ -2515,16 +2613,16 @@ void BarApp::handle_popover_pointer(const wl::PointerEvent& ev) {
         return;
     }
     if (open_popover_ == PopoverKind::ControlCenter) {
-        if (lx >= 24.0 && lx <= 198.0 && ly >= 174.0 && ly <= 206.0) {
+        if (lx >= 24.0 && lx <= 204.0 && ly >= 156.0 && ly <= 206.0) {
             dragging_volume_ = true;
-            cached_audio_.volume_percent = slider_pct(lx, 30.0, 158.0);
+            cached_audio_.volume_percent = slider_pct(lx, 30.0, 166.0);
             cached_audio_.muted = false;
             apply_hw_throttled(true, cached_audio_.volume_percent, true);
             popover_surface_->request_redraw();
             bar_surface_->request_redraw();
             return;
         }
-        if (lx >= 24.0 && lx <= 240.0 && ly >= 232.0 && ly <= 264.0) {
+        if (lx >= 24.0 && lx <= 240.0 && ly >= 214.0 && ly <= 264.0) {
             dragging_brightness_ = true;
             cached_brightness_.percent = slider_pct(lx, 30.0, 190.0);
             apply_hw_throttled(false, cached_brightness_.percent, true);
@@ -2533,43 +2631,38 @@ void BarApp::handle_popover_pointer(const wl::PointerEvent& ev) {
         }
     }
 
-    for (const auto& a : pop_actions_) {
+    const auto actions_copy = pop_actions_;
+    for (const auto& a : actions_copy) {
         if (lx >= a.x && lx <= a.x + a.w && ly >= a.y && ly <= a.y + a.h) {
             if (a.id == "settings") {
                 launch_settings(a.arg);
-                close_popover();
+                queue_close_popover();
             } else if (a.id == "open_tuner") {
-                open_popover_ = PopoverKind::None;
-                open_popover(PopoverKind::ShaderTuner, popover_anchor_x_);
+                queue_open_popover(PopoverKind::ShaderTuner, popover_anchor_x_);
             } else if (a.id == "open_cc") {
-                open_popover_ = PopoverKind::None;
-                open_popover(PopoverKind::ControlCenter, popover_anchor_x_);
+                queue_open_popover(PopoverKind::ControlCenter, popover_anchor_x_);
             } else if (a.id == "open_spotlight") {
-                open_popover_ = PopoverKind::None;
-                open_popover(PopoverKind::Spotlight, popover_anchor_x_);
+                queue_open_popover(PopoverKind::Spotlight, popover_anchor_x_);
             } else if (a.id == "open_wifi") {
-                open_popover_ = PopoverKind::None;
-                open_popover(PopoverKind::Wifi, popover_anchor_x_);
+                queue_open_popover(PopoverKind::Wifi, popover_anchor_x_);
             } else if (a.id == "open_bt") {
-                open_popover_ = PopoverKind::None;
-                open_popover(PopoverKind::Bluetooth, popover_anchor_x_);
+                queue_open_popover(PopoverKind::Bluetooth, popover_anchor_x_);
             } else if (a.id == "open_vol") {
-                open_popover_ = PopoverKind::None;
-                open_popover(PopoverKind::Volume, popover_anchor_x_);
+                queue_open_popover(PopoverKind::Volume, popover_anchor_x_);
             } else if (a.id == "exec") {
                 sysinfo::spawn_detached({"bash", "-c", a.arg});
-                close_popover();
+                queue_close_popover();
             } else if (a.id == "exec_keep") {
                 sysinfo::spawn_detached({"bash", "-c", a.arg});
                 refresh_hardware_quick();
             } else if (a.id == "niri") {
                 sysinfo::niri_action(a.arg);
-                close_popover();
+                queue_close_popover();
             } else if (a.id == "wifi_toggle") {
                 cached_wifi_.enabled = !cached_wifi_.enabled;
                 if (!cached_wifi_.enabled) { cached_wifi_.connected = false; cached_wifi_.ssid.clear(); }
                 sysinfo::spawn_detached({"nmcli", "radio", "wifi", cached_wifi_.enabled ? "on" : "off"});
-                popover_surface_->request_redraw();
+                if (popover_surface_) popover_surface_->request_redraw();
                 bar_surface_->request_redraw();
                 trigger_async_refresh(true);
             } else if (a.id == "wifi_rescan") {
@@ -2577,34 +2670,34 @@ void BarApp::handle_popover_pointer(const wl::PointerEvent& ev) {
                 trigger_async_refresh(true);
             } else if (a.id == "wifi_connect") {
                 sysinfo::connect_wifi(a.arg);
-                close_popover();
+                queue_close_popover();
                 trigger_async_refresh(true);
             } else if (a.id == "wifi_disconnect") {
                 sysinfo::spawn_detached({"nmcli", "connection", "down", a.arg});
                 cached_wifi_.connected = false;
                 cached_wifi_.ssid.clear();
-                popover_surface_->request_redraw();
+                if (popover_surface_) popover_surface_->request_redraw();
                 bar_surface_->request_redraw();
                 trigger_async_refresh(true);
             } else if (a.id == "bt_toggle") {
                 cached_bt_.powered = !cached_bt_.powered;
                 if (!cached_bt_.powered) cached_bt_.connected_name.clear();
                 sysinfo::spawn_detached({"bluetoothctl", "power", cached_bt_.powered ? "on" : "off"});
-                popover_surface_->request_redraw();
+                if (popover_surface_) popover_surface_->request_redraw();
                 bar_surface_->request_redraw();
                 trigger_async_refresh(true);
             } else if (a.id == "bt_connect") {
                 sysinfo::connect_bluetooth_device(a.arg, true);
-                close_popover();
+                queue_close_popover();
                 trigger_async_refresh(true);
             } else if (a.id == "bt_disconnect") {
                 sysinfo::connect_bluetooth_device(a.arg, false);
-                close_popover();
+                queue_close_popover();
                 trigger_async_refresh(true);
             } else if (a.id == "mute_toggle") {
                 cached_audio_.muted = !cached_audio_.muted;
                 sysinfo::spawn_detached({"wpctl", "set-mute", "@DEFAULT_AUDIO_SINK@", "toggle"});
-                popover_surface_->request_redraw();
+                if (popover_surface_) popover_surface_->request_redraw();
                 bar_surface_->request_redraw();
                 trigger_async_refresh(false);
             } else if (a.id == "sink_set") {
@@ -2613,20 +2706,20 @@ void BarApp::handle_popover_pointer(const wl::PointerEvent& ev) {
             } else if (a.id == "bright_set") {
                 cached_brightness_.percent = std::clamp(std::atoi(a.arg.c_str()), 5, 100);
                 sysinfo::spawn_detached({"brightnessctl", "set", std::to_string(cached_brightness_.percent) + "%"});
-                popover_surface_->request_redraw();
+                if (popover_surface_) popover_surface_->request_redraw();
             } else if (a.id == "power_profile") {
                 cached_battery_.power_profile = a.arg;
                 sysinfo::spawn_detached({"powerprofilesctl", "set", a.arg});
-                popover_surface_->request_redraw();
+                if (popover_surface_) popover_surface_->request_redraw();
                 trigger_async_refresh(true);
             } else if (a.id == "cc_airdrop") {
                 cfg_.cc_airdrop_on = !cfg_.cc_airdrop_on;
                 config::save_config(cfg_);
-                popover_surface_->request_redraw();
+                if (popover_surface_) popover_surface_->request_redraw();
             } else if (a.id == "cc_focus") {
                 cfg_.cc_focus_on = !cfg_.cc_focus_on;
                 config::save_config(cfg_);
-                popover_surface_->request_redraw();
+                if (popover_surface_) popover_surface_->request_redraw();
             } else if (a.id == "ws_toggle") {
                 cfg_.show_workspaces = !cfg_.show_workspaces;
                 config::save_config(cfg_);
@@ -2650,11 +2743,7 @@ void BarApp::handle_popover_pointer(const wl::PointerEvent& ev) {
                 config::save_config(cfg_);
                 reload_config();
             } else if (a.id == "recapture_bg") {
-                const double saved_x = popover_anchor_x_;
-                close_popover();
-                display_.roundtrip();
-                capture_live_backdrop(true);
-                open_popover(PopoverKind::ShaderTuner, saved_x);
+                queue_recapture_and_open_tuner(popover_anchor_x_);
             } else if (a.id == "iconstyle_cycle") {
                 static const char* kStyles[4] = {"default", "dark", "clear", "tinted"};
                 int next = 0;
@@ -2686,9 +2775,9 @@ void BarApp::handle_popover_key(const wl::KeyEvent& ev) {
                 spotlight_query_.clear();
                 spotlight_selected_ = 0;
                 rebuild_spotlight_matches();
-                popover_surface_->request_redraw();
+                if (popover_surface_) popover_surface_->request_redraw();
             } else {
-                close_popover();
+                queue_close_popover();
             }
             return;
         }
@@ -2697,14 +2786,14 @@ void BarApp::handle_popover_key(const wl::KeyEvent& ev) {
                 spotlight_selected_ = (spotlight_selected_ > 0)
                     ? (spotlight_selected_ - 1)
                     : static_cast<int>(spotlight_matches_.size()) - 1;
-                popover_surface_->request_redraw();
+                if (popover_surface_) popover_surface_->request_redraw();
             }
             return;
         }
         if (ev.keysym == XKB_KEY_Down) {
             if (!spotlight_matches_.empty()) {
                 spotlight_selected_ = (spotlight_selected_ + 1) % static_cast<int>(spotlight_matches_.size());
-                popover_surface_->request_redraw();
+                if (popover_surface_) popover_surface_->request_redraw();
             }
             return;
         }
@@ -2713,26 +2802,24 @@ void BarApp::handle_popover_key(const wl::KeyEvent& ev) {
                 const auto item = spotlight_matches_[static_cast<std::size_t>(spotlight_selected_)];
                 if (item.action_id == "settings") {
                     launch_settings(item.arg);
-                    close_popover();
+                    queue_close_popover();
                 } else if (item.action_id == "open_tuner") {
-                    open_popover_ = PopoverKind::None;
-                    open_popover(PopoverKind::ShaderTuner, std::max(0, bar_surface_->width() - 320));
+                    queue_open_popover(PopoverKind::ShaderTuner, std::max(0, bar_surface_->width() - 320));
                 } else if (item.action_id == "open_cc") {
-                    open_popover_ = PopoverKind::None;
-                    open_popover(PopoverKind::ControlCenter, std::max(0, bar_surface_->width() - 290));
+                    queue_open_popover(PopoverKind::ControlCenter, std::max(0, bar_surface_->width() - 290));
                 } else if (item.action_id == "autohide_toggle") {
                     cfg_.auto_hide = !cfg_.auto_hide;
                     config::save_config(cfg_);
                     reload_config();
-                    close_popover();
+                    queue_close_popover();
                 } else if (item.action_id == "look_toggle") {
                     cfg_.look = (cfg_.look == "attached") ? "pill" : "attached";
                     config::save_config(cfg_);
                     reload_config();
-                    close_popover();
+                    queue_close_popover();
                 } else if (item.action_id == "exec" && !item.arg.empty()) {
                     sysinfo::spawn_detached({"bash", "-c", item.arg});
-                    close_popover();
+                    queue_close_popover();
                 }
             }
             return;
@@ -2742,7 +2829,7 @@ void BarApp::handle_popover_key(const wl::KeyEvent& ev) {
                 spotlight_query_.pop_back();
                 spotlight_selected_ = 0;
                 rebuild_spotlight_matches();
-                popover_surface_->request_redraw();
+                if (popover_surface_) popover_surface_->request_redraw();
             }
             return;
         }
@@ -2750,12 +2837,12 @@ void BarApp::handle_popover_key(const wl::KeyEvent& ev) {
             spotlight_query_ += ev.utf8;
             spotlight_selected_ = 0;
             rebuild_spotlight_matches();
-            popover_surface_->request_redraw();
+            if (popover_surface_) popover_surface_->request_redraw();
             return;
         }
     }
     if (ev.keysym == XKB_KEY_Escape) {
-        close_popover();
+        queue_close_popover();
     }
 }
 

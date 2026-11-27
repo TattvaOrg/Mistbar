@@ -346,6 +346,22 @@ struct MizzleRenderer::Impl {
         glBindTexture(GL_TEXTURE_2D, 0);
     }
 
+    void ensure_fallback_backdrop(float blur_scale) {
+        if (backdrop_rt.tex != 0 && up_rts[kPyramidLevels - 1].tex != 0) return;
+        std::array<std::uint8_t, 16 * 16 * 4> pixels{};
+        for (std::size_t i = 0; i < pixels.size(); i += 4) {
+            pixels[i + 0] = 68;  // B
+            pixels[i + 1] = 46;  // G
+            pixels[i + 2] = 32;  // R
+            pixels[i + 3] = 255; // A
+        }
+        glBindTexture(GL_TEXTURE_2D, desktop_tex);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 16, 16, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+        glBindTexture(GL_TEXTURE_2D, 0);
+        pyramid_dirty = true;
+        ensure_pyramid(16, 16, blur_scale);
+    }
+
     void draw_panels_and_ui(GLuint target_fbo,
                             int surf_w,
                             int surf_h,
@@ -359,7 +375,8 @@ struct MizzleRenderer::Impl {
                             const std::vector<GlassPanelSpec>& panels,
                             GLuint ui_tex,
                             int ui_w,
-                            int ui_h) {
+                            int ui_h,
+                            bool translucent_glass) {
         glBindFramebuffer(GL_FRAMEBUFFER, target_fbo);
         glViewport(0, 0, surf_w, surf_h);
         glDisable(GL_DEPTH_TEST);
@@ -388,6 +405,7 @@ struct MizzleRenderer::Impl {
             glUniform1f(glGetUniformLocation(prog_glass, "uTime"), time_sec);
             glUniform4f(glGetUniformLocation(prog_glass, "uClick"),
                         click.x, click.y, click.age_sec, click.active ? 1.0f : 0.0f);
+            glUniform1f(glGetUniformLocation(prog_glass, "uTranslucentGlass"), translucent_glass ? 1.0f : 0.0f);
 
             const GLint loc_rect = glGetUniformLocation(prog_glass, "uRect");
             const GLint loc_rad  = glGetUniformLocation(prog_glass, "uRadius");
@@ -398,6 +416,7 @@ struct MizzleRenderer::Impl {
             const GLint loc_tint = glGetUniformLocation(prog_glass, "uTintColor");
             const GLint loc_shad = glGetUniformLocation(prog_glass, "uShadowAlpha");
             const GLint loc_pill = glGetUniformLocation(prog_glass, "uIsPill");
+            const GLint loc_opac = glGetUniformLocation(prog_glass, "uCustomOpacity");
 
             for (const auto& p : panels) {
                 if (p.w <= 1.0f || p.h <= 1.0f) continue;
@@ -411,6 +430,7 @@ struct MizzleRenderer::Impl {
                 glUniform4f(loc_tint, m.tintR, m.tintG, m.tintB, m.tintAlpha);
                 glUniform1f(loc_shad, m.shadowAlpha);
                 glUniform1f(loc_pill, p.isPill ? 1.0f : 0.0f);
+                glUniform1f(loc_opac, p.customOpacity);
                 draw_quad();
             }
         }
@@ -746,7 +766,8 @@ bool MizzleRenderer::render_surface(wl_surface* surf,
                                     const ClickPulse& click,
                                     const GlassMaterial& material,
                                     const std::vector<GlassPanelSpec>& panels,
-                                    cairo_surface_t* ui_overlay) {
+                                    cairo_surface_t* ui_overlay,
+                                    bool translucent_glass) {
 #if MISTBAR_HAS_OPENGL
     if (!available_ || !has_wl_egl_ || !surf || surf_px_w <= 0 || surf_px_h <= 0) return false;
     auto it = impl_->surfaces.find(surf);
@@ -767,6 +788,8 @@ bool MizzleRenderer::render_surface(wl_surface* surf,
 
     if (backdrop_w_ > 0 && backdrop_h_ > 0) {
         impl_->ensure_pyramid(backdrop_w_, backdrop_h_, material.blurScale);
+    } else {
+        impl_->ensure_fallback_backdrop(material.blurScale);
     }
     if (ui_overlay) {
         impl_->upload_ui_texture(slot.ui_tex, slot.ui_w, slot.ui_h, ui_overlay);
@@ -776,12 +799,14 @@ bool MizzleRenderer::render_surface(wl_surface* surf,
                               std::max(1, backdrop_w_), std::max(1, backdrop_h_),
                               origin_px_x, origin_px_y,
                               time_sec, click, material, panels,
-                              slot.ui_tex, slot.ui_w, slot.ui_h);
+                              slot.ui_tex, slot.ui_w, slot.ui_h,
+                              translucent_glass);
 
     return eglSwapBuffers(impl_->egl_dpy, slot.egl_surf) == EGL_TRUE;
 #else
     (void)surf; (void)surf_px_w; (void)surf_px_h; (void)origin_px_x; (void)origin_px_y;
     (void)time_sec; (void)click; (void)material; (void)panels; (void)ui_overlay;
+    (void)translucent_glass;
     return false;
 #endif
 }
@@ -793,7 +818,8 @@ bool MizzleRenderer::render_to_cairo(cairo_surface_t* dst,
                                      const ClickPulse& click,
                                      const GlassMaterial& material,
                                      const std::vector<GlassPanelSpec>& panels,
-                                     cairo_surface_t* ui_overlay) {
+                                     cairo_surface_t* ui_overlay,
+                                     bool translucent_glass) {
 #if MISTBAR_HAS_OPENGL
     if (!available_ || !dst) return false;
     const int pw = cairo_image_surface_get_width(dst);
@@ -805,6 +831,8 @@ bool MizzleRenderer::render_to_cairo(cairo_surface_t* dst,
     impl_->alloc_rt(impl_->offscreen_rt, pw, ph);
     if (backdrop_w_ > 0 && backdrop_h_ > 0) {
         impl_->ensure_pyramid(backdrop_w_, backdrop_h_, material.blurScale);
+    } else {
+        impl_->ensure_fallback_backdrop(material.blurScale);
     }
     if (ui_overlay) {
         impl_->upload_ui_texture(impl_->offscreen_ui_tex, impl_->offscreen_ui_w, impl_->offscreen_ui_h, ui_overlay);
@@ -816,7 +844,8 @@ bool MizzleRenderer::render_to_cairo(cairo_surface_t* dst,
                               time_sec, click, material, panels,
                               ui_overlay ? impl_->offscreen_ui_tex : 0,
                               ui_overlay ? impl_->offscreen_ui_w : 0,
-                              ui_overlay ? impl_->offscreen_ui_h : 0);
+                              ui_overlay ? impl_->offscreen_ui_h : 0,
+                              translucent_glass);
 
     std::vector<std::uint8_t> px(static_cast<std::size_t>(pw) * static_cast<std::size_t>(ph) * 4U);
     glBindFramebuffer(GL_FRAMEBUFFER, impl_->offscreen_rt.fbo);
@@ -840,7 +869,7 @@ bool MizzleRenderer::render_to_cairo(cairo_surface_t* dst,
     return true;
 #else
     (void)dst; (void)origin_px_x; (void)origin_px_y; (void)time_sec;
-    (void)click; (void)material; (void)panels; (void)ui_overlay;
+    (void)click; (void)material; (void)panels; (void)ui_overlay; (void)translucent_glass;
     return false;
 #endif
 }

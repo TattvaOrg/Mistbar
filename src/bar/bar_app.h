@@ -160,11 +160,17 @@ private:
     int popover_top_m_ = 32;
     int popover_left_m_ = 0;
     int popover_w_ = 248;
-    int popover_h_ = 412;
+    int popover_h_ = 408;
     bool dragging_brightness_ = false;
     bool dragging_volume_ = false;
     int dragging_tuner_idx_ = -1;
     std::chrono::steady_clock::time_point last_hw_cmd_{};
+
+    enum class PendingPopOp { None, Open, Close, RecaptureAndOpenTuner };
+    PendingPopOp pending_pop_op_ = PendingPopOp::None;
+    PopoverKind pending_pop_kind_ = PopoverKind::None;
+    double pending_pop_anchor_x_ = 0.0;
+    std::string pending_pop_menu_name_;
 
     // Background worker for non-blocking subprocess polling
     struct HwSnapshot {
@@ -226,6 +232,9 @@ private:
     bool ensure_popover_surface();
     void close_popover();
     void open_popover(PopoverKind kind, double anchor_x, const std::string& menu_name = "");
+    void queue_open_popover(PopoverKind kind, double anchor_x, const std::string& menu_name = "");
+    void queue_close_popover();
+    void queue_recapture_and_open_tuner(double anchor_x);
     void launch_settings(const std::string& page = "");
     void rebuild_spotlight_matches();
 
