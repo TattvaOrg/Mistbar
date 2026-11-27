@@ -263,7 +263,7 @@ void MistbarWindow::handle_pointer(const wl::PointerEvent& ev) {
             return;
         }
 
-        const bool in_nav_pills = headless_titlebar_ && (ev.x >= m + 236.0 && ev.x <= m + 316.0);
+        const bool in_nav_pills = headless_titlebar_ && (ev.x >= m + 230.0 && ev.x <= m + 336.0);
         if ((!headless_titlebar_ || ev.x > m + 230.0) && !in_nav_pills) {
             const auto now = std::chrono::steady_clock::now();
             if (last_click_time_.time_since_epoch().count() != 0 &&

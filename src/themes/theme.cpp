@@ -61,41 +61,42 @@ ThemePalette resolve_palette(const config::MistbarConfig& cfg) {
     const double spec_a = std::clamp(static_cast<double>(cfg.specular_intensity), 0.0, 1.0);
 
     if (p.dark_mode) {
-        p.glass_tint        = {0.10, 0.13, 0.20, p.solid_mode ? 1.0 : tint_a * 0.85};
-        p.panel_bg          = {0.11, 0.13, 0.17, p.solid_mode ? 0.98 : (p.clear_mode ? 0.24 : 0.62)};
-        p.surface_bg        = {0.115, 0.120, 0.140, 0.97};
-        p.surface_elevated  = {0.165, 0.175, 0.205, 0.97};
-        p.sidebar_bg        = {0.16, 0.18, 0.23, 0.72};
-        p.text_primary      = {0.96, 0.97, 0.99, 1.0};
-        p.text_secondary    = {0.64, 0.68, 0.75, 1.0};
-        p.border_outer      = {1.0, 1.0, 1.0, p.solid_mode ? 0.14 : (0.18 + spec_a * 0.30)};
-        p.specular_top      = {1.0, 1.0, 1.0, p.solid_mode ? 0.14 : (0.28 + spec_a * 0.62)};
-        p.inner_shadow      = {0.0, 0.0, 0.0, p.solid_mode ? 0.30 : 0.22};
+        // Pure black-only / deep obsidian palette matching macOS dark System Settings
+        p.glass_tint        = {0.02, 0.02, 0.03, p.solid_mode ? 1.0 : tint_a * 0.85};
+        p.panel_bg          = {0.04, 0.04, 0.05, p.solid_mode ? 0.99 : (p.clear_mode ? 0.18 : 0.72)};
+        p.surface_bg        = {0.00, 0.00, 0.00, 0.99};
+        p.surface_elevated  = {0.075, 0.075, 0.085, 0.99};
+        p.sidebar_bg        = {0.055, 0.055, 0.065, 0.98};
+        p.text_primary      = {0.96, 0.96, 0.97, 1.0};
+        p.text_secondary    = {0.56, 0.56, 0.60, 1.0};
+        p.border_outer      = {1.0, 1.0, 1.0, p.solid_mode ? 0.10 : (0.14 + spec_a * 0.22)};
+        p.specular_top      = {1.0, 1.0, 1.0, p.solid_mode ? 0.10 : (0.22 + spec_a * 0.50)};
+        p.inner_shadow      = {0.0, 0.0, 0.0, p.solid_mode ? 0.45 : 0.30};
         p.bar_bg            = p.solid_mode
-                                  ? Color{0.08, 0.09, 0.11, 1.0}
+                                  ? Color{0.00, 0.00, 0.00, 1.0}
                                   : (p.clear_mode
-                                         ? Color{0.12, 0.15, 0.22, std::clamp(tint_a * 0.45, 0.02, 0.35)}
-                                         : Color{0.10, 0.13, 0.20, std::clamp(tint_a * 0.82 + 0.04, 0.04, 0.85)});
-        p.titlebar_active   = {0.14, 0.16, 0.21, 0.86};
-        p.titlebar_inactive = {0.11, 0.12, 0.15, 0.78};
+                                         ? Color{0.02, 0.02, 0.03, std::clamp(tint_a * 0.35, 0.02, 0.24)}
+                                         : Color{0.03, 0.03, 0.04, std::clamp(tint_a * 0.72 + 0.03, 0.03, 0.72)});
+        p.titlebar_active   = {0.04, 0.04, 0.05, 0.95};
+        p.titlebar_inactive = {0.02, 0.02, 0.03, 0.90};
     } else {
-        p.glass_tint        = {0.98, 0.99, 1.00, p.solid_mode ? 1.0 : tint_a * 0.82};
-        p.panel_bg          = {0.98, 0.99, 1.00, p.solid_mode ? 0.98 : (p.clear_mode ? 0.34 : 0.72)};
-        p.surface_bg        = {0.95, 0.955, 0.97, 0.98};
-        p.surface_elevated  = {1.00, 1.00, 1.00, 0.99};
-        p.sidebar_bg        = {0.98, 0.99, 1.00, 0.80};
-        p.text_primary      = {0.08, 0.09, 0.11, 1.0};
-        p.text_secondary    = {0.40, 0.43, 0.48, 1.0};
-        p.border_outer      = {1.0, 1.0, 1.0, p.solid_mode ? 0.60 : (0.58 + spec_a * 0.38)};
-        p.specular_top      = {1.0, 1.0, 1.0, p.solid_mode ? 0.40 : (0.55 + spec_a * 0.42)};
-        p.inner_shadow      = {0.0, 0.0, 0.0, 0.08};
+        // Keep dark obsidian UI even if legacy config specifies light, honoring black-only UI
+        p.dark_mode         = true;
+        p.glass_tint        = {0.02, 0.02, 0.03, p.solid_mode ? 1.0 : tint_a * 0.85};
+        p.panel_bg          = {0.04, 0.04, 0.05, p.solid_mode ? 0.99 : (p.clear_mode ? 0.18 : 0.72)};
+        p.surface_bg        = {0.00, 0.00, 0.00, 0.99};
+        p.surface_elevated  = {0.075, 0.075, 0.085, 0.99};
+        p.sidebar_bg        = {0.055, 0.055, 0.065, 0.98};
+        p.text_primary      = {0.96, 0.96, 0.97, 1.0};
+        p.text_secondary    = {0.56, 0.56, 0.60, 1.0};
+        p.border_outer      = {1.0, 1.0, 1.0, p.solid_mode ? 0.10 : (0.14 + spec_a * 0.22)};
+        p.specular_top      = {1.0, 1.0, 1.0, p.solid_mode ? 0.10 : (0.22 + spec_a * 0.50)};
+        p.inner_shadow      = {0.0, 0.0, 0.0, p.solid_mode ? 0.45 : 0.30};
         p.bar_bg            = p.solid_mode
-                                  ? Color{0.97, 0.975, 0.985, 1.0}
-                                  : (p.clear_mode
-                                         ? Color{1.00, 1.00, 1.00, std::clamp(tint_a * 0.34, 0.04, 0.28)}
-                                         : Color{0.98, 0.99, 1.00, std::clamp(tint_a * 0.72 + 0.08, 0.10, 0.84)});
-        p.titlebar_active   = {0.96, 0.97, 0.99, 0.90};
-        p.titlebar_inactive = {0.93, 0.94, 0.96, 0.82};
+                                  ? Color{0.00, 0.00, 0.00, 1.0}
+                                  : Color{0.03, 0.03, 0.04, std::clamp(tint_a * 0.72 + 0.03, 0.03, 0.72)};
+        p.titlebar_active   = {0.04, 0.04, 0.05, 0.95};
+        p.titlebar_inactive = {0.02, 0.02, 0.03, 0.90};
     }
 
     if (cfg.glassy_text_color == "white") {

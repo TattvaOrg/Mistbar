@@ -75,35 +75,35 @@ cairo_surface_t* load_scaled_image(const std::string& path, int w, int h) {
     return surf;
 }
 
-// Synthesizes a macOS Tahoe-style luminous ocean/twilight backdrop if no wallpaper is active.
+// Pure black monochrome geometric backdrop when no wallpaper is active (zero random images/colors).
 cairo_surface_t* create_tahoe_backdrop(int w, int h) {
     cairo_surface_t* surf = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, w, h);
     cairo_t* cr = cairo_create(surf);
 
-    cairo_pattern_t* base = cairo_pattern_create_linear(0.0, 0.0, static_cast<double>(w), static_cast<double>(h));
-    cairo_pattern_add_color_stop_rgb(base, 0.00, 0.06, 0.16, 0.34);
-    cairo_pattern_add_color_stop_rgb(base, 0.38, 0.12, 0.34, 0.56);
-    cairo_pattern_add_color_stop_rgb(base, 0.72, 0.22, 0.22, 0.48);
-    cairo_pattern_add_color_stop_rgb(base, 1.00, 0.08, 0.14, 0.28);
-    cairo_set_source(cr, base);
+    cairo_set_source_rgb(cr, 0.0, 0.0, 0.0);
     cairo_paint(cr);
-    cairo_pattern_destroy(base);
 
-    cairo_pattern_t* orb1 = cairo_pattern_create_radial(w * 0.25, h * 0.28, 10.0,
-                                                        w * 0.25, h * 0.28, std::max(w, h) * 0.45);
-    cairo_pattern_add_color_stop_rgba(orb1, 0.0, 0.25, 0.72, 0.96, 0.45);
-    cairo_pattern_add_color_stop_rgba(orb1, 1.0, 0.25, 0.72, 0.96, 0.0);
-    cairo_set_source(cr, orb1);
-    cairo_paint(cr);
-    cairo_pattern_destroy(orb1);
+    // Subtle monochrome architectural lines so refraction & edge caustics remain legible on black
+    cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.04);
+    cairo_set_line_width(cr, 1.0);
+    const double step = 36.0;
+    for (double x = 0.0; x < static_cast<double>(w); x += step) {
+        cairo_move_to(cr, x, 0.0);
+        cairo_line_to(cr, x, static_cast<double>(h));
+    }
+    for (double y = 0.0; y < static_cast<double>(h); y += step) {
+        cairo_move_to(cr, 0.0, y);
+        cairo_line_to(cr, static_cast<double>(w), y);
+    }
+    cairo_stroke(cr);
 
-    cairo_pattern_t* orb2 = cairo_pattern_create_radial(w * 0.76, h * 0.42, 10.0,
-                                                        w * 0.76, h * 0.42, std::max(w, h) * 0.42);
-    cairo_pattern_add_color_stop_rgba(orb2, 0.0, 0.56, 0.36, 0.92, 0.36);
-    cairo_pattern_add_color_stop_rgba(orb2, 1.0, 0.56, 0.36, 0.92, 0.0);
-    cairo_set_source(cr, orb2);
+    cairo_pattern_t* sheen = cairo_pattern_create_radial(w * 0.5, h * 0.35, 8.0,
+                                                          w * 0.5, h * 0.35, std::max(w, h) * 0.45);
+    cairo_pattern_add_color_stop_rgba(sheen, 0.0, 0.18, 0.18, 0.20, 0.32);
+    cairo_pattern_add_color_stop_rgba(sheen, 1.0, 0.00, 0.00, 0.00, 0.0);
+    cairo_set_source(cr, sheen);
     cairo_paint(cr);
-    cairo_pattern_destroy(orb2);
+    cairo_pattern_destroy(sheen);
 
     cairo_destroy(cr);
     return surf;

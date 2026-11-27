@@ -7,10 +7,10 @@
 
 namespace mistbar::defaults {
 
-constexpr int BAR_HEIGHT           = 28;
+constexpr int BAR_HEIGHT           = 26;
 constexpr int BAR_MARGIN           = 6;
 constexpr int BAR_SIDE_MARGIN      = 12;
-constexpr int BAR_CORNER_RADIUS    = 16;
+constexpr int BAR_CORNER_RADIUS    = 14;
 
 constexpr int TITLEBAR_HEIGHT      = 36;
 constexpr int TRAFFIC_LIGHT_SIZE   = 12;
@@ -20,7 +20,7 @@ constexpr int WINDOW_SHADOW_RADIUS = 24;
 
 constexpr int   BLUR_RADIUS            = 20;
 constexpr float GLASS_OPACITY          = 0.85f;
-constexpr float TINT_OPACITY           = 0.18f;
+constexpr float TINT_OPACITY           = 0.14f;
 constexpr float SPECULAR_INTENSITY     = 0.55f;
 constexpr float REFRACTION_STRENGTH    = 0.45f;
 constexpr float BEZEL_THICKNESS        = 0.35f;
@@ -29,7 +29,7 @@ constexpr float INNER_SHADOW_OPACITY   = 0.18f;
 
 constexpr const char* THEME_DEFAULT    = "dark";
 constexpr const char* PRESET_DEFAULT   = "regular";
-constexpr const char* LOOK_DEFAULT     = "pill";
+constexpr const char* LOOK_DEFAULT     = "attached";
 constexpr const char* ACCENT_DEFAULT   = "#0A84FF";
 
 constexpr std::size_t LOG_MAX_BYTES    = 5U * 1024U * 1024U;
