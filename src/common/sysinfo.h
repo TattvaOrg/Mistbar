@@ -80,8 +80,15 @@ struct TrayItem {
     std::string icon;
 };
 
+struct DesktopAppEntry {
+    std::string name;
+    std::string category;
+    std::string exec_cmd;
+};
+
 bool run_exec(const std::vector<std::string>& argv, std::string* stdout_out = nullptr);
 bool spawn_detached(const std::vector<std::string>& argv);
+std::vector<DesktopAppEntry> list_desktop_apps();
 
 BatteryStatus get_battery_status(bool include_profile = false);
 bool set_power_profile(const std::string& profile);

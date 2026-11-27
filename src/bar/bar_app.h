@@ -52,8 +52,17 @@ private:
         Brightness,
         Battery,
         ControlCenter,
+        Spotlight,
+        ShaderTuner,
         Calendar,
         PowerMenu
+    };
+
+    struct SpotlightItem {
+        std::string title;
+        std::string subtitle;
+        std::string action_id;
+        std::string arg;
     };
 
     struct HitRect {
@@ -113,6 +122,13 @@ private:
     int popover_h_ = 200;
     bool dragging_brightness_ = false;
     bool dragging_volume_ = false;
+    int dragging_tuner_idx_ = -1;
+
+    // Spotlight state
+    std::string spotlight_query_;
+    int spotlight_selected_ = 0;
+    std::vector<sysinfo::DesktopAppEntry> cached_apps_;
+    std::vector<SpotlightItem> spotlight_matches_;
 
     // Cached system state
     std::string cached_clock_;
@@ -136,6 +152,7 @@ private:
     void close_popover();
     void open_popover(PopoverKind kind, double anchor_x, const std::string& menu_name = "");
     void launch_settings(const std::string& page = "");
+    void rebuild_spotlight_matches();
 
     void draw_bar(cairo_t* cr, int w, int h);
     void draw_bar_foreground(cairo_t* cr, int w, int h);
@@ -153,6 +170,8 @@ private:
     void draw_brightness_popover(cairo_t* cr, int w);
     void draw_battery_popover(cairo_t* cr, int w);
     void draw_control_center(cairo_t* cr, int w);
+    void draw_spotlight_popover(cairo_t* cr, int w);
+    void draw_shader_tuner_popover(cairo_t* cr, int w);
     void draw_calendar_popover(cairo_t* cr, int w);
     void draw_power_popover(cairo_t* cr, int w);
 

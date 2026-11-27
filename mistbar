@@ -242,7 +242,13 @@ case "${1:-}" in
         ;;
     look)
         shift
-        cmd_ipc_or_fail "look:${1:-pill}"
+        cmd_ipc_or_fail "look:${1:-attached}"
+        ;;
+    tuner)
+        cmd_ipc_or_fail "tuner"
+        ;;
+    spotlight)
+        cmd_ipc_or_fail "spotlight"
         ;;
     config)
         if [ -n "${EDITOR:-}" ] && [ -f "$CONFIG_FILE" ]; then

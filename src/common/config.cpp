@@ -99,7 +99,13 @@ MistbarConfig load_config() {
 
     cfg.look = j.get_string("look", cfg.look);
     if (cfg.look != "pill" && cfg.look != "attached") {
-        cfg.look = "pill";
+        cfg.look = "attached";
+    }
+
+    cfg.icon_style = j.get_string("iconStyle", cfg.icon_style);
+    if (cfg.icon_style != "default" && cfg.icon_style != "dark" &&
+        cfg.icon_style != "clear" && cfg.icon_style != "tinted") {
+        cfg.icon_style = "default";
     }
 
     cfg.accent_color      = j.get_string("accentColor", cfg.accent_color);
@@ -134,6 +140,8 @@ MistbarConfig load_config() {
     cfg.show_spotlight      = j.get_bool("showSpotlight", cfg.show_spotlight);
     cfg.show_control_center = j.get_bool("showControlCenter", cfg.show_control_center);
     cfg.show_power_menu     = j.get_bool("showPowerMenu", cfg.show_power_menu);
+    cfg.cc_airdrop_on       = j.get_bool("ccAirdropOn", cfg.cc_airdrop_on);
+    cfg.cc_focus_on         = j.get_bool("ccFocusOn", cfg.cc_focus_on);
 
     cfg.clock_format = j.get_string("clockFormat", cfg.clock_format);
     if (cfg.clock_format != "12h" && cfg.clock_format != "24h") {
@@ -149,6 +157,7 @@ bool save_config(const MistbarConfig& cfg) {
     obj["theme"]               = cfg.theme;
     obj["glassPreset"]         = cfg.glass_preset;
     obj["look"]                = cfg.look;
+    obj["iconStyle"]           = cfg.icon_style;
     obj["accentColor"]         = cfg.accent_color;
     obj["glassyTextColor"]     = cfg.glassy_text_color;
     obj["wallpaper"]           = cfg.wallpaper;
@@ -178,6 +187,8 @@ bool save_config(const MistbarConfig& cfg) {
     obj["showSpotlight"]       = cfg.show_spotlight;
     obj["showControlCenter"]   = cfg.show_control_center;
     obj["showPowerMenu"]       = cfg.show_power_menu;
+    obj["ccAirdropOn"]         = cfg.cc_airdrop_on;
+    obj["ccFocusOn"]           = cfg.cc_focus_on;
     obj["clockFormat"]         = cfg.clock_format;
     obj["showSeconds"]         = cfg.show_seconds;
     return xdg::write_text_file(config_file_path(), json::Value(std::move(obj)).dump(2));

@@ -50,8 +50,7 @@ void main() {
 }
 )";
 
-// Optical Liquid Glass fragment shader in top-left Cairo coordinate space.
-// Note: FBO texture row 0 maps to top-left when rendering top-to-bottom into glReadPixels.
+// Optical Liquid Glass fragment shader combining mizzle meniscus optics with Mistbar top-down coordinates.
 const char* kGlassFragShaderSrc = R"(#version 120
 uniform sampler2D u_backdrop;
 uniform int u_has_backdrop;
@@ -78,12 +77,39 @@ float sdRoundedBox(vec2 p, vec2 b, float r) {
 }
 
 vec2 sdRoundedBoxGrad(vec2 p, vec2 b, float r) {
-    float eps = 1.0;
+    float eps = 0.85;
     float dx = sdRoundedBox(p + vec2(eps, 0.0), b, r) - sdRoundedBox(p - vec2(eps, 0.0), b, r);
     float dy = sdRoundedBox(p + vec2(0.0, eps), b, r) - sdRoundedBox(p - vec2(0.0, eps), b, r);
     vec2 g = vec2(dx, dy);
     float len = length(g);
     return (len > 1e-5) ? (g / len) : vec2(0.0, -1.0);
+}
+
+float hash12(vec2 p) {
+    vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.x + p3.y) * p3.z);
+}
+
+float valueNoise(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    vec2 u = f * f * (3.0 - 2.0 * f);
+    float a = hash12(i);
+    float b = hash12(i + vec2(1.0, 0.0));
+    float c = hash12(i + vec2(0.0, 1.0));
+    float d = hash12(i + vec2(1.0, 1.0));
+    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+}
+
+vec2 liquidNormal(vec2 px) {
+    vec2 q = px * 0.016;
+    const float e = 2.0 * 0.016;
+    float hx = (valueNoise(q + vec2(e, 0.0)) * 0.65 + valueNoise((q + vec2(e, 0.0)) * 2.15) * 0.35) -
+               (valueNoise(q - vec2(e, 0.0)) * 0.65 + valueNoise((q - vec2(e, 0.0)) * 2.15) * 0.35);
+    float hy = (valueNoise(q + vec2(0.0, e)) * 0.65 + valueNoise((q + vec2(0.0, e)) * 2.15) * 0.35) -
+               (valueNoise(q - vec2(0.0, e)) * 0.65 + valueNoise((q - vec2(0.0, e)) * 2.15) * 0.35);
+    return vec2(hx, hy);
 }
 
 vec4 sampleBackdrop(vec2 panel_px) {
@@ -96,103 +122,87 @@ vec4 sampleBackdrop(vec2 panel_px) {
 }
 
 void main() {
-    // v_uv.y == 0 at GL bottom -> glReadPixels row 0 is Cairo top, so use v_uv directly for Cairo top-down coords!
-    //Wait: a_pos y=-1 -> v_uv.y=0 -> GL framebuffer row 0 -> glReadPixels row 0 -> Cairo top row 0!
-    // So v_uv = (0,0) IS top-left in Cairo output AND top-left in Cairo-uploaded backdrop!
     vec2 px = v_uv * u_panel_size;
     vec2 center = u_panel_size * 0.5;
     vec2 p = px - center;
-    float r = clamp(u_radius, 0.0, min(center.x, center.y));
+    float min_dim = min(center.x, center.y);
+    float r = clamp(u_radius, 0.0, min_dim);
     float d = sdRoundedBox(p, center, r);
 
-    float shape_alpha = 1.0 - smoothstep(-0.75, 0.75, d);
+    float shape_alpha = 1.0 - smoothstep(-0.7, 0.7, d);
     if (shape_alpha <= 0.001) {
         gl_FragColor = vec4(0.0);
         return;
     }
 
-    float min_half = max(4.0, min(center.x, center.y));
-    float bezel_px = max(3.5, min_half * (0.34 + u_bezel * 0.66));
-    float edge_dist = max(0.0, -d);
-    float edge_t = 1.0 - clamp(edge_dist / bezel_px, 0.0, 1.0);
-
-    // Plano-convex lens dome profile (steep optical curvature near outer rim, smooth flat center)
-    float dome = pow(edge_t, 2.15);
-    float meniscus = sqrt(max(0.0, 1.0 - (1.0 - edge_t) * (1.0 - edge_t)));
+    float min_half = max(4.0, min_dim);
     vec2 grad = sdRoundedBoxGrad(p, center, r);
-    vec3 normal = normalize(vec3(grad * (0.25 * meniscus + 0.85 * dome) * (0.45 + u_bezel * 0.95),
-                                 sqrt(max(0.05, 1.0 - dome * dome * 0.72))));
+    float corner_boost = 1.0 + 0.32 * abs(grad.x * grad.y) * 2.0;
+    float bezel_px = clamp(min_half * (0.28 + u_bezel * 0.45), 5.0, 14.0);
+    float edge_dist = max(0.0, -d);
+    float edge_t = clamp(1.0 - edge_dist / bezel_px, 0.0, 1.0);
+    float rim_curve = (pow(edge_t, 1.95) * 0.72 + pow(edge_t, 3.8) * 0.38) * corner_boost;
 
-    // Strong bezel UV magnification/compression & RGB chromatic dispersion
-    float refract_px = u_refraction * 34.0 * (0.14 * meniscus + 0.86 * dome);
-    vec2 refract_off = -grad * refract_px;
-    float disp_px = u_chromatic * 10.5 * (0.25 * meniscus + 0.75 * dome);
-    vec2 disp_off = grad * disp_px;
+    vec2 flow_n = liquidNormal(px);
+    vec2 center_lens = -p * (0.018 * u_refraction);
+    vec2 rim_bend = -grad * rim_curve * (24.0 * u_refraction);
+    vec2 fluid_off = flow_n * (5.0 * u_refraction);
+    vec2 refract_off = center_lens + rim_bend + fluid_off;
 
+    // 5-tap spectral dispersion along curved rim & corners (mizzle style)
+    vec2 disp_step = grad * pow(edge_t, 2.0) * corner_boost * (4.2 * u_chromatic);
     vec3 refracted = u_tint_color;
     if (u_has_backdrop != 0) {
-        float cr = sampleBackdrop(px + refract_off + disp_off).r;
-        float cg = sampleBackdrop(px + refract_off).g;
-        float cb = sampleBackdrop(px + refract_off - disp_off).b;
-        refracted = vec3(cr, cg, cb);
+        vec3 c0 = sampleBackdrop(px + refract_off + disp_step * 1.0).rgb;
+        vec3 c1 = sampleBackdrop(px + refract_off + disp_step * 0.5).rgb;
+        vec3 c2 = sampleBackdrop(px + refract_off).rgb;
+        vec3 c3 = sampleBackdrop(px + refract_off - disp_step * 0.5).rgb;
+        vec3 c4 = sampleBackdrop(px + refract_off - disp_step * 1.0).rgb;
+        refracted = vec3(
+            c0.r * 0.55 + c1.r * 0.45,
+            c1.g * 0.25 + c2.g * 0.50 + c3.g * 0.25,
+            c3.b * 0.45 + c4.b * 0.55
+        );
     }
 
-    // View & lighting vectors (Y down in Cairo space: top light has y < 0)
-    vec3 V = vec3(0.0, 0.0, 1.0);
-    float fresnel = pow(1.0 - clamp(dot(normal, V), 0.0, 1.0), 2.0);
+    float luma = dot(refracted, vec3(0.2126, 0.7152, 0.0722));
+    vec3 vibrant = mix(vec3(luma), refracted, 1.15);
 
-    vec3 L1 = normalize(vec3(-0.34, -0.84, 0.42));
-    vec3 H1 = normalize(L1 + V);
-    float spec1 = pow(max(dot(normal, H1), 0.0), 26.0);
-
-    vec3 L2 = normalize(vec3(0.42, 0.78, 0.46));
-    vec3 H2 = normalize(L2 + V);
-    float spec2 = pow(max(dot(normal, H2), 0.0), 20.0) * 0.55;
+    // Mizzle anisotropic diagonal specular shine + razor rim
+    vec2 light_dir = normalize(vec2(-0.68, -0.73));
+    float top_left_glint = pow(max(dot(grad, light_dir), 0.0), 2.2);
+    float bot_right_glint = pow(max(dot(grad, -light_dir), 0.0), 2.6) * 0.70;
+    float diag_shine = (top_left_glint + bot_right_glint) * (0.95 + 0.25 * abs(grad.x * grad.y) * 2.0);
 
     float cursor_spec = 0.0;
     if (u_cursor_reactive != 0 && u_pointer.x >= 0.0) {
         vec2 lp = u_pointer * u_panel_size;
         vec2 delta = (lp - px) / max(min_half * 3.6, 52.0);
-        float glow = exp(-dot(delta, delta) * 1.25);
-        vec3 Lc = normalize(vec3(delta.x, delta.y, 0.55));
-        vec3 Hc = normalize(Lc + V);
-        cursor_spec = (0.38 + 0.62 * pow(max(dot(normal, Hc), 0.0), 16.0)) * glow;
+        cursor_spec = exp(-dot(delta, delta) * 1.35) * 0.65;
     }
 
-    // Apple Liquid Glass signature double-corner directional rim + luminous inner caustic
-    float top_sheen = exp(-max(0.0, px.y) / max(3.0, u_panel_size.y * 0.22)) * (u_dark_mode != 0 ? 0.24 : 0.36);
-    float rim_band = smoothstep(2.0, 0.0, edge_dist);
-    float diag_glint = pow(abs(dot(grad, normalize(vec2(-0.68, -0.73)))), 1.6);
-    float top_bias = clamp(0.68 - grad.y * 0.55, 0.18, 1.0);
-    float rim_caustic = rim_band * (0.42 * top_bias + 0.58 * diag_glint);
-    float spec_total = u_specular * (spec1 * 0.95 + spec2 * 0.52 + fresnel * 0.72 + top_sheen + cursor_spec * 0.75);
+    float vert_sheen = smoothstep(center.y, -center.y, p.y);
+    float inner_kiss = pow(edge_t, 2.9) * smoothstep(0.0, 1.2, edge_dist);
+    float razor_rim = smoothstep(1.10, 0.0, edge_dist);
+    float grain = (hash12(px) - 0.5) * 0.006;
 
-    vec3 prism = vec3(
-        0.5 + 0.5 * sin(grad.x * 2.6 + grad.y * 1.4 + 0.0),
-        0.5 + 0.5 * sin(grad.x * 2.6 + grad.y * 1.4 + 2.094),
-        0.5 + 0.5 * sin(grad.x * 2.6 + grad.y * 1.4 + 4.188)
-    );
-    vec3 rim_color = mix(vec3(1.0), prism, clamp(u_chromatic * 0.65, 0.0, 0.65));
+    vec3 rim_color = vec3(0.96, 0.97, 1.0);
+    float rim_strength = (0.12 + 0.42 * diag_shine + cursor_spec) * u_specular;
 
     if (u_overlay_only != 0) {
-        // Compositor provides real window blur behind surface; keep interior clean & layer rim caustics
-        vec3 base_col = mix(u_tint_color, refracted, clamp(u_refraction * pow(dome, 1.4) * 0.28, 0.0, 0.28));
-        if (u_dark_mode == 0) {
-            base_col = mix(base_col, vec3(1.0), fresnel * 0.18);
-        }
-        vec3 lit_col = base_col + rim_color * (spec_total * 0.85 + rim_caustic * (0.24 + u_specular * 0.58));
-        float interior_a = clamp(u_tint_opacity * (u_dark_mode != 0 ? 0.74 : 0.66), 0.02, 0.85);
-        float edge_a = clamp(dome * u_refraction * 0.16 + spec_total * 0.52 + rim_caustic * 0.38, 0.0, 0.92);
-        float out_a = clamp(max(interior_a, edge_a) * u_glass_opacity, 0.02, 0.95) * shape_alpha;
+        vec3 base_col = mix(u_tint_color, vibrant, clamp(u_refraction * rim_curve * 0.24, 0.0, 0.24));
+        vec3 lit_col = base_col + rim_color * (inner_kiss * (0.08 + 0.22 * diag_shine) * u_specular + razor_rim * rim_strength * 0.55) + vec3(grain);
+        float interior_a = clamp(u_tint_opacity * 0.72, 0.02, 0.85);
+        float edge_a = clamp(rim_curve * u_refraction * 0.14 + razor_rim * rim_strength * 0.45 + inner_kiss * 0.18, 0.0, 0.90);
+        float out_a = clamp(max(interior_a, edge_a) * u_glass_opacity, 0.02, 0.94) * shape_alpha;
         gl_FragColor = vec4(clamp(lit_col, 0.0, 1.0) * out_a, out_a);
     } else {
-        vec3 glass_body = mix(refracted, u_tint_color, clamp(u_tint_opacity * (u_dark_mode != 0 ? 0.95 : 0.78), 0.0, 1.0));
-        if (u_dark_mode == 0) {
-            glass_body = mix(glass_body, vec3(1.0), 0.08 + fresnel * 0.22);
-        }
-        vec3 lit_col = glass_body + rim_color * (spec_total * 0.82 + rim_caustic * (0.22 + u_specular * 0.55));
+        vec3 glass_body = mix(vibrant, u_tint_color, clamp(u_tint_opacity * 0.94, 0.0, 1.0));
+        glass_body += vec3(0.032 * vert_sheen - 0.010 * (1.0 - vert_sheen)) + vec3(grain);
+        glass_body += rim_color * inner_kiss * (0.08 + 0.20 * diag_shine) * u_specular;
+        glass_body = mix(glass_body, rim_color, clamp(razor_rim * rim_strength, 0.0, 0.62));
         float out_a = clamp(u_glass_opacity, 0.08, 1.0) * shape_alpha;
-        gl_FragColor = vec4(clamp(lit_col, 0.0, 1.0) * out_a, out_a);
+        gl_FragColor = vec4(clamp(glass_body, 0.0, 1.0) * out_a, out_a);
     }
 }
 )";

@@ -26,27 +26,27 @@ int main(int argc, char** argv) {
         if (std::strcmp(argv[i], "--dump-png") == 0) {
             mistbar::wl::Display dummy_dpy;
             mistbar::bar::BarApp preview_app(dummy_dpy);
-            cairo_surface_t* canvas = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 1280, 480);
+            cairo_surface_t* canvas = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 1280, 500);
             cairo_t* cr = cairo_create(canvas);
 
             mistbar::glass::GlassBackdrop bg;
             auto cfg = mistbar::config::load_config();
             auto pal = mistbar::themes::resolve_palette(cfg);
             bg.init(cfg);
-            bg.load_wallpaper(pal.wallpaper_path, 1280, 480, 0);
+            bg.load_wallpaper(pal.wallpaper_path, 1280, 500, 0);
             if (bg.raw_wallpaper()) {
                 cairo_set_source_surface(cr, bg.raw_wallpaper(), 0.0, 0.0);
                 cairo_paint(cr);
             }
 
             cairo_save(cr);
-            cairo_translate(cr, 12.0, 6.0);
-            preview_app.render_bar_preview(cr, 1256, cfg.bar_height);
+            cairo_translate(cr, 0.0, 0.0);
+            preview_app.render_bar_preview(cr, 1280, cfg.bar_height);
             cairo_restore(cr);
 
             cairo_save(cr);
-            cairo_translate(cr, 896.0, 32.0);
-            preview_app.render_control_center_preview(cr, 368, 366);
+            cairo_translate(cr, 964.0, 26.0);
+            preview_app.render_control_center_preview(cr, 300, 456);
             cairo_restore(cr);
 
             cairo_destroy(cr);

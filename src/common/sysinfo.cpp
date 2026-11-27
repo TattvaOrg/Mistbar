@@ -596,4 +596,85 @@ std::string get_active_wallpaper() {
     return {};
 }
 
+namespace {
+
+std::string strip_desktop_exec_codes(const std::string& raw) {
+    std::string out;
+    out.reserve(raw.size());
+    for (std::size_t i = 0; i < raw.size(); ++i) {
+        if (raw[i] == '%' && i + 1 < raw.size()) {
+            ++i;
+            continue;
+        }
+        out.push_back(raw[i]);
+    }
+    return trim(out);
+}
+
+} // namespace
+
+std::vector<DesktopAppEntry> list_desktop_apps() {
+    std::vector<DesktopAppEntry> apps;
+    std::unordered_set<std::string> seen;
+    std::vector<fs::path> dirs;
+    if (const char* home = std::getenv("HOME")) {
+        dirs.push_back(fs::path(home) / ".local/share/applications");
+    }
+    dirs.emplace_back("/usr/local/share/applications");
+    dirs.emplace_back("/usr/share/applications");
+
+    std::error_code ec;
+    for (const auto& dir : dirs) {
+        if (!fs::exists(dir, ec)) continue;
+        for (const auto& entry : fs::directory_iterator(dir, ec)) {
+            if (!entry.is_regular_file(ec)) continue;
+            if (entry.path().extension() != ".desktop") continue;
+            const auto txt = xdg::read_text_file(entry.path().string());
+            if (!txt) continue;
+
+            bool in_desktop_entry = false;
+            bool no_display = false;
+            bool hidden = false;
+            std::string name;
+            std::string exec_cmd;
+            std::string category = "Application";
+
+            for (const auto& line : split_lines(*txt)) {
+                const std::string t = trim(line);
+                if (t.empty() || t[0] == '#') continue;
+                if (t.front() == '[' && t.back() == ']') {
+                    in_desktop_entry = (t == "[Desktop Entry]");
+                    continue;
+                }
+                if (!in_desktop_entry) continue;
+                const auto eq = t.find('=');
+                if (eq == std::string::npos) continue;
+                const std::string key = trim(t.substr(0, eq));
+                const std::string val = trim(t.substr(eq + 1));
+                if (key == "Name" && name.empty()) name = val;
+                else if (key == "Exec" && exec_cmd.empty()) exec_cmd = strip_desktop_exec_codes(val);
+                else if (key == "Categories") {
+                    const auto semi = val.find(';');
+                    const std::string first_cat = trim(semi == std::string::npos ? val : val.substr(0, semi));
+                    if (!first_cat.empty()) category = first_cat;
+                } else if (key == "NoDisplay" && (val == "true" || val == "1")) {
+                    no_display = true;
+                } else if (key == "Hidden" && (val == "true" || val == "1")) {
+                    hidden = true;
+                }
+            }
+
+            if (no_display || hidden || name.empty() || exec_cmd.empty()) continue;
+            if (seen.count(name)) continue;
+            seen.insert(name);
+            apps.push_back({std::move(name), std::move(category), std::move(exec_cmd)});
+        }
+    }
+
+    std::sort(apps.begin(), apps.end(), [](const DesktopAppEntry& a, const DesktopAppEntry& b) {
+        return a.name < b.name;
+    });
+    return apps;
+}
+
 } // namespace mistbar::sysinfo
