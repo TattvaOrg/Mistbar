@@ -191,7 +191,11 @@ public:
                 int height,
                 int exclusive_zone = 0,
                 KeyboardMode kb_mode = KeyboardMode::None,
-                wl_output* output = nullptr);
+                wl_output* output = nullptr,
+                int margin_top = 0,
+                int margin_right = 0,
+                int margin_bottom = 0,
+                int margin_left = 0);
 
     bool is_created() const noexcept { return layer_surface_ != nullptr; }
     void set_geometry(int width, int height, int top, int right, int bottom, int left, int exclusive_zone);

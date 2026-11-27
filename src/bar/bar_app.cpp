@@ -280,8 +280,7 @@ void draw_vector_quick_glyph(cairo_t* cr, int idx, double cx, double cy, const t
 BarApp::BarApp(wl::Display& display)
     : display_(display),
       bar_surface_(std::make_unique<wl::LayerSurface>(display)),
-      trigger_surface_(std::make_unique<wl::LayerSurface>(display)),
-      popover_surface_(std::make_unique<wl::LayerSurface>(display)) {}
+      trigger_surface_(std::make_unique<wl::LayerSurface>(display)) {}
 
 BarApp::~BarApp() {
     stop_worker();
@@ -528,7 +527,7 @@ void BarApp::apply_worker_updates() {
     if (bar_changed) {
         bar_surface_->request_redraw();
     }
-    if (pop_changed) {
+    if (pop_changed && popover_surface_) {
         popover_surface_->request_redraw();
     }
 }
@@ -557,10 +556,13 @@ void BarApp::capture_live_backdrop(bool force) {
 }
 
 bool BarApp::ensure_popover_surface() {
-    if (!popover_surface_) {
-        popover_surface_ = std::make_unique<wl::LayerSurface>(display_);
+    if (popover_surface_) {
+        if (popover_surface_->wl_handle()) {
+            mizzle_.unregister_surface(popover_surface_->wl_handle());
+        }
+        popover_surface_.reset();
     }
-    if (popover_surface_->is_created()) return true;
+    popover_surface_ = std::make_unique<wl::LayerSurface>(display_);
 
     popover_surface_->set_draw_callback([this](cairo_t* cr, int w, int h) { draw_popover(cr, w, h); });
     popover_surface_->set_egl_draw_callback([this](wl_surface* s, int w, int h, int scale) {
@@ -583,12 +585,18 @@ bool BarApp::ensure_popover_surface() {
         update_visibility();
         if (bar_surface_) bar_surface_->request_redraw();
     });
-    popover_surface_->set_visible(false);
+
+    const int total_w = popover_w_ + kPopShadowMargin * 2;
+    const int total_h = popover_h_ + kPopShadowMargin * 2;
+    const auto kb = (open_popover_ == PopoverKind::Spotlight)
+        ? wl::LayerSurface::KeyboardMode::Exclusive
+        : wl::LayerSurface::KeyboardMode::OnDemand;
+
+    popover_surface_->set_visible(true);
     return popover_surface_->create("mistbar-popover", wl::LayerSurface::Layer::Overlay,
                                     wl::LayerSurface::Top | wl::LayerSurface::Left,
-                                    popover_w_ + kPopShadowMargin * 2,
-                                    popover_h_ + kPopShadowMargin * 2,
-                                    -1, wl::LayerSurface::KeyboardMode::OnDemand);
+                                    total_w, total_h, -1, kb, nullptr,
+                                    popover_top_m_, 0, 0, popover_left_m_);
 }
 
 bool BarApp::init() {
@@ -647,8 +655,6 @@ bool BarApp::init() {
     trigger_surface_->create("mistbar-trigger", wl::LayerSurface::Layer::Overlay,
                              anchors, 0, 3, -1, wl::LayerSurface::KeyboardMode::None);
 
-    ensure_popover_surface();
-
     display_.set_toplevel_change_callback([this]() {
         trigger_async_refresh(false);
     });
@@ -697,7 +703,7 @@ void BarApp::reload_config() {
     apply_geometry();
     update_visibility();
     bar_surface_->request_redraw();
-    if (open_popover_ != PopoverKind::None) {
+    if (open_popover_ != PopoverKind::None && popover_surface_) {
         popover_surface_->request_redraw();
     }
     trigger_async_refresh(true);
@@ -821,14 +827,19 @@ void BarApp::launch_settings(const std::string& page) {
 }
 
 void BarApp::close_popover() {
-    if (open_popover_ != PopoverKind::None) {
+    if (open_popover_ != PopoverKind::None || popover_surface_) {
         open_popover_ = PopoverKind::None;
         active_menu_name_.clear();
         hovered_pop_id_.clear();
         dragging_brightness_ = false;
         dragging_volume_ = false;
         dragging_tuner_idx_ = -1;
-        popover_surface_->hide();
+        if (popover_surface_) {
+            if (popover_surface_->wl_handle()) {
+                mizzle_.unregister_surface(popover_surface_->wl_handle());
+            }
+            popover_surface_.reset();
+        }
         update_visibility();
         bar_surface_->request_redraw();
     }
@@ -872,10 +883,6 @@ void BarApp::rebuild_spotlight_matches() {
 void BarApp::open_popover(PopoverKind kind, double anchor_x, const std::string& menu_name) {
     if (open_popover_ == kind && active_menu_name_ == menu_name) {
         close_popover();
-        return;
-    }
-
-    if (!ensure_popover_surface()) {
         return;
     }
 
@@ -936,7 +943,6 @@ void BarApp::open_popover(PopoverKind kind, double anchor_x, const std::string& 
         target_x = (bar_w - popover_w_) / 2 + side_m - kPopShadowMargin;
     }
     const int total_w = popover_w_ + kPopShadowMargin * 2;
-    const int total_h = popover_h_ + kPopShadowMargin * 2;
     const int max_left = std::max(0, bar_w + side_m * 2 - total_w);
     const int left_m = std::clamp(target_x, 0, max_left);
 
@@ -944,12 +950,10 @@ void BarApp::open_popover(PopoverKind kind, double anchor_x, const std::string& 
     popover_top_m_ = std::max(0, top_m);
     popover_left_m_ = left_m;
 
-    popover_surface_->set_keyboard_mode(
-        kind == PopoverKind::Spotlight
-            ? wl::LayerSurface::KeyboardMode::Exclusive
-            : wl::LayerSurface::KeyboardMode::OnDemand);
-    popover_surface_->set_geometry(total_w, total_h, popover_top_m_, 0, 0, popover_left_m_, -1);
-    popover_surface_->show();
+    if (!ensure_popover_surface()) {
+        open_popover_ = PopoverKind::None;
+        return;
+    }
     bar_surface_->request_redraw();
 }
 

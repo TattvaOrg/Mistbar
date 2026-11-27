@@ -407,7 +407,11 @@ bool LayerSurface::create(const std::string& ns,
                           int height,
                           int exclusive_zone,
                           KeyboardMode kb_mode,
-                          wl_output* output) {
+                          wl_output* output,
+                          int margin_top,
+                          int margin_right,
+                          int margin_bottom,
+                          int margin_left) {
     if (!display_.layer_shell() || !wl_surface_) {
         log::error("wayland", "Cannot create layer surface: wlr-layer-shell unavailable");
         return false;
@@ -438,6 +442,7 @@ bool LayerSurface::create(const std::string& ns,
     zwlr_layer_surface_v1_set_size(layer_surface_, static_cast<std::uint32_t>(req_width_),
                                    static_cast<std::uint32_t>(req_height_));
     zwlr_layer_surface_v1_set_anchor(layer_surface_, anchors_);
+    zwlr_layer_surface_v1_set_margin(layer_surface_, margin_top, margin_right, margin_bottom, margin_left);
     zwlr_layer_surface_v1_set_exclusive_zone(layer_surface_, exclusive_zone_);
     zwlr_layer_surface_v1_set_keyboard_interactivity(layer_surface_, static_cast<std::uint32_t>(kb_mode_));
 
@@ -496,6 +501,8 @@ void LayerSurface::set_keyboard_mode(KeyboardMode kb_mode) {
 
 void LayerSurface::hide() {
     visible_ = false;
+    configured_ = false;
+    awaiting_configure_ = false;
     redraw_pending_ = false;
     cancel_frame_callback();
     if (wl_surface_) {
