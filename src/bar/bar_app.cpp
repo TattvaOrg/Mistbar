@@ -677,7 +677,7 @@ bool BarApp::init() {
 
     if (cfg_.gpu_acceleration) {
         if (mizzle_.init(display_.handle())) {
-            if (!palette_.wallpaper_path.empty() && backdrop_.raw_wallpaper()) {
+            if (!cfg_.wallpaper.empty() && backdrop_.raw_wallpaper()) {
                 mizzle_.set_backdrop_cairo(backdrop_.raw_wallpaper());
             }
         } else {
@@ -768,7 +768,7 @@ void BarApp::reload_config() {
     if (palette_.wallpaper_path != prev_wp || palette_.blur_radius != prev_blur || !backdrop_.raw_wallpaper()) {
         const auto out = display_.primary_output();
         backdrop_.load_wallpaper(palette_.wallpaper_path, out.width, out.height, palette_.blur_radius);
-        if (mizzle_.is_available() && !palette_.wallpaper_path.empty() && backdrop_.raw_wallpaper()) {
+        if (mizzle_.is_available() && !cfg_.wallpaper.empty() && backdrop_.raw_wallpaper()) {
             mizzle_.set_backdrop_cairo(backdrop_.raw_wallpaper());
         }
     }
@@ -1189,6 +1189,11 @@ glass::GlassMaterial BarApp::current_glass_material() const {
     });
 }
 
+bool BarApp::use_direct_glass() const {
+    return mizzle_.has_wayland_egl() && (cfg_.glass_preset != "solid") &&
+           !live_backdrop_captured_ && cfg_.wallpaper.empty();
+}
+
 glass::GlassMaterial BarApp::current_bar_material() const {
     glass::GlassMaterial bar_mat = current_glass_material();
     bar_mat.shadowAlpha = 0.0f;
@@ -1196,6 +1201,13 @@ glass::GlassMaterial BarApp::current_bar_material() const {
         return bar_mat;
     }
     if (cfg_.look == "attached") {
+        if (cfg_.blur_radius <= 0) {
+            bar_mat.frost = 0.0f;
+            bar_mat.refraction = 0.0f;
+            bar_mat.specular = 0.0f;
+            bar_mat.tintAlpha = 0.0f;
+            return bar_mat;
+        }
         bar_mat.frost = std::min(bar_mat.frost, 0.28f);
         bar_mat.refraction = std::min(bar_mat.refraction, 0.14f);
         bar_mat.specular = 0.02f;
@@ -1212,8 +1224,6 @@ glass::GlassMaterial BarApp::current_bar_material() const {
 std::vector<glass::GlassPanelSpec> BarApp::collect_bar_panels(int w, int h, int scale) const {
     const float sc = static_cast<float>(std::max(1, scale));
     const float radius = (cfg_.look == "pill") ? static_cast<float>(cfg_.border_radius) : 0.0f;
-    const bool use_direct = mizzle_.has_wayland_egl() && (cfg_.glass_preset != "solid") &&
-                            !live_backdrop_captured_ && palette_.wallpaper_path.empty();
     glass::GlassPanelSpec p;
     p.x = 0.0f;
     p.y = 0.0f;
@@ -1223,9 +1233,13 @@ std::vector<glass::GlassPanelSpec> BarApp::collect_bar_panels(int w, int h, int 
     p.isPill = (cfg_.look == "pill");
     p.overrideMaterial = true;
     p.customMaterial = current_bar_material();
-    p.customOpacity = (cfg_.glass_preset == "solid") ? 1.0f : ((cfg_.look == "pill") ? 0.44f : 0.30f);
+    const bool transparent_attached = (cfg_.glass_preset != "solid") && (cfg_.look == "attached") &&
+                                      (cfg_.blur_radius <= 0);
+    p.customOpacity = (cfg_.glass_preset == "solid")
+                          ? 1.0f
+                          : (transparent_attached ? 0.0f : ((cfg_.look == "pill") ? 0.44f : 0.30f));
     p.noBorder = (cfg_.look == "attached");
-    p.directGlass = use_direct;
+    p.directGlass = use_direct_glass();
     return {p};
 }
 
@@ -1236,8 +1250,7 @@ std::vector<glass::GlassPanelSpec> BarApp::collect_popover_panels(int total_w, i
     const float my = static_cast<float>(kPopTopMargin);
     const float pw = std::max(1.0f, static_cast<float>(total_w) - 2.0f * mx);
     const float ph = std::max(1.0f, static_cast<float>(total_h) - my - mx);
-    const bool use_direct = mizzle_.has_wayland_egl() && (cfg_.glass_preset != "solid") &&
-                            !live_backdrop_captured_ && palette_.wallpaper_path.empty();
+    const bool use_direct = use_direct_glass();
 
     glass::GlassMaterial pop_mat = current_glass_material();
     // Omit per-panel 22px outer shadow halos so toggling windows and Control Center gaps stay crystal clear
@@ -1303,8 +1316,7 @@ std::vector<glass::GlassPanelSpec> BarApp::collect_tuner_panels(int total_w, int
     spec.overrideMaterial = true;
     spec.customMaterial = tn_mat;
     spec.customOpacity = (cfg_.glass_preset == "solid") ? 1.0f : 0.56f;
-    spec.directGlass = mizzle_.has_wayland_egl() && (cfg_.glass_preset != "solid") &&
-                       !live_backdrop_captured_ && palette_.wallpaper_path.empty();
+    spec.directGlass = use_direct_glass();
     return {spec};
 }
 
@@ -1507,37 +1519,41 @@ void BarApp::draw_bar(cairo_t* cr, int w, int h) {
         cairo_surface_destroy(ui);
     }
 
-    const double radius = (cfg_.look == "pill") ? static_cast<double>(cfg_.border_radius) : 0.0;
-    const bool overlay_only = !palette_.solid_mode;
-    const int ptr_bucket = (cfg_.cursor_reactive && pointer_norm_x_ >= 0.0)
-        ? static_cast<int>(pointer_norm_x_ * 32.0)
-        : -1;
+    const bool transparent_attached = (cfg_.glass_preset != "solid") && (cfg_.look == "attached") &&
+                                      (cfg_.blur_radius <= 0);
+    if (!transparent_attached) {
+        const double radius = (cfg_.look == "pill") ? static_cast<double>(cfg_.border_radius) : 0.0;
+        const bool overlay_only = !palette_.solid_mode;
+        const int ptr_bucket = (cfg_.cursor_reactive && pointer_norm_x_ >= 0.0)
+            ? static_cast<int>(pointer_norm_x_ * 32.0)
+            : -1;
 
-    if (!bar_glass_cache_ || bar_cache_w_ != w || bar_cache_h_ != h ||
-        bar_cache_gen_ != cfg_gen_ || bar_cache_ptr_bucket_ != ptr_bucket) {
-        if (bar_glass_cache_) cairo_surface_destroy(bar_glass_cache_);
-        bar_glass_cache_ = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, std::max(1, w), std::max(1, h));
-        cairo_t* bcr = cairo_create(bar_glass_cache_);
-        cairo_set_operator(bcr, CAIRO_OPERATOR_CLEAR);
-        cairo_paint(bcr);
-        cairo_set_operator(bcr, CAIRO_OPERATOR_OVER);
-        glass::draw_glass_panel(bcr, &backdrop_, 0.0, 0.0,
-                                (cfg_.look == "pill") ? defaults::BAR_SIDE_MARGIN : 0.0,
-                                (cfg_.look == "pill") ? cfg_.bar_margin : 0.0,
-                                static_cast<double>(w), static_cast<double>(h),
-                                radius, palette_, &palette_.bar_bg, overlay_only,
-                                pointer_norm_x_, pointer_norm_y_);
-        cairo_destroy(bcr);
-        bar_cache_w_ = w;
-        bar_cache_h_ = h;
-        bar_cache_gen_ = cfg_gen_;
-        bar_cache_ptr_bucket_ = ptr_bucket;
+        if (!bar_glass_cache_ || bar_cache_w_ != w || bar_cache_h_ != h ||
+            bar_cache_gen_ != cfg_gen_ || bar_cache_ptr_bucket_ != ptr_bucket) {
+            if (bar_glass_cache_) cairo_surface_destroy(bar_glass_cache_);
+            bar_glass_cache_ = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, std::max(1, w), std::max(1, h));
+            cairo_t* bcr = cairo_create(bar_glass_cache_);
+            cairo_set_operator(bcr, CAIRO_OPERATOR_CLEAR);
+            cairo_paint(bcr);
+            cairo_set_operator(bcr, CAIRO_OPERATOR_OVER);
+            glass::draw_glass_panel(bcr, &backdrop_, 0.0, 0.0,
+                                    (cfg_.look == "pill") ? defaults::BAR_SIDE_MARGIN : 0.0,
+                                    (cfg_.look == "pill") ? cfg_.bar_margin : 0.0,
+                                    static_cast<double>(w), static_cast<double>(h),
+                                    radius, palette_, &palette_.bar_bg, overlay_only,
+                                    pointer_norm_x_, pointer_norm_y_);
+            cairo_destroy(bcr);
+            bar_cache_w_ = w;
+            bar_cache_h_ = h;
+            bar_cache_gen_ = cfg_gen_;
+            bar_cache_ptr_bucket_ = ptr_bucket;
+        }
+
+        cairo_save(cr);
+        cairo_set_source_surface(cr, bar_glass_cache_, 0.0, 0.0);
+        cairo_paint(cr);
+        cairo_restore(cr);
     }
-
-    cairo_save(cr);
-    cairo_set_source_surface(cr, bar_glass_cache_, 0.0, 0.0);
-    cairo_paint(cr);
-    cairo_restore(cr);
 
     draw_bar_foreground(cr, w, h);
 }

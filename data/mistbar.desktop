@@ -5,6 +5,7 @@ GenericName=Menu Bar Settings
 Comment=Configure Mistbar macOS Liquid Glass top bar
 Exec=mistbar-settings
 Icon=mistbar
+StartupWMClass=mistbar-settings
 Terminal=false
 Categories=Settings;DesktopSettings;Utility;
 StartupNotify=false

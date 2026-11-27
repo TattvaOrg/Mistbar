@@ -54,12 +54,12 @@ void apply_glass_preset(MistbarConfig& cfg, const std::string& preset_name) {
         cfg.glass_opacity        = 0.88f;
     } else if (preset_name == "clear" || preset_name == "transparent") {
         cfg.glass_preset         = "clear";
-        cfg.blur_radius          = 12;
+        cfg.blur_radius          = 0;
         cfg.refraction_strength  = 0.65f;
         cfg.bezel_thickness      = 0.42f;
         cfg.chromatic_aberration = 0.46f;
         cfg.specular_intensity   = 0.50f;
-        cfg.tint_opacity         = 0.08f;
+        cfg.tint_opacity         = 0.04f;
         cfg.glass_opacity        = 0.82f;
     } else if (preset_name == "solid") {
         cfg.glass_preset         = "solid";

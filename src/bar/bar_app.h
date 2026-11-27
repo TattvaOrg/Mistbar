@@ -258,6 +258,7 @@ private:
     void launch_settings(const std::string& page = "");
     void rebuild_spotlight_matches();
 
+    bool use_direct_glass() const;
     glass::GlassMaterial current_glass_material() const;
     glass::GlassMaterial current_bar_material() const;
     std::vector<glass::GlassPanelSpec> collect_bar_panels(int w, int h, int scale) const;
