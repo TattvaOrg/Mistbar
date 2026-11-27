@@ -82,6 +82,19 @@ void test_mizzle_renderer_offscreen() {
         MISTBAR_CHECK(mr.render_to_cairo(out, 0.0f, 0.0f, 0.0f, {}, mat, panels, ui, false));
         MISTBAR_CHECK(mr.render_to_cairo(out, 0.0f, 0.0f, 0.0f, {}, mat, panels, ui, true));
 
+        // Direct Glass + zero shadow must keep outer pixels strictly transparent (no blurred halo/backdrop)
+        auto direct_mat = mat;
+        direct_mat.shadowAlpha = 0.0f;
+        panels[0].overrideMaterial = true;
+        panels[0].customMaterial = direct_mat;
+        panels[0].directGlass = true;
+        MISTBAR_CHECK(mr.render_to_cairo(out, 0.0f, 0.0f, 0.0f, {}, direct_mat, panels, ui, true));
+        cairo_surface_flush(out);
+        const std::uint8_t* px = cairo_image_surface_get_data(out);
+        const int stride = cairo_image_surface_get_stride(out);
+        const std::uint8_t outer_alpha = px[60 * stride + 64 * 4 + 3];
+        MISTBAR_CHECK(outer_alpha == 0);
+
         cairo_surface_destroy(out);
         cairo_surface_destroy(ui);
         cairo_surface_destroy(bd);

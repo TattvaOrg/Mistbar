@@ -22,6 +22,7 @@ uniform vec4 uClick; // (clickX, clickY, ageSec, activeFlag >0.5)
 uniform float uTranslucentGlass;
 uniform float uCustomOpacity;
 uniform float uNoBorder;
+uniform float uDirectGlass;
 
 float sdRoundedBox(vec2 p, vec2 b, float r) {
     vec2 q = abs(p) - b + vec2(r);
@@ -89,9 +90,12 @@ void main() {
 
     float sd = sdRoundedBox(local, halfSize, radius);
 
-    // Soft ambient shadow underneath
-    float shadowDist = sdRoundedBox(local - vec2(0.0, 4.0), halfSize + vec2(0.5), radius + 0.5);
-    float shadow = (1.0 - smoothstep(-2.0, 22.0, shadowDist)) * uShadowAlpha;
+    // Soft ambient shadow underneath (omitted completely when uShadowAlpha <= 0.001)
+    float shadow = 0.0;
+    if (uShadowAlpha > 0.001) {
+        float shadowDist = sdRoundedBox(local - vec2(0.0, 4.0), halfSize + vec2(0.5), radius + 0.5);
+        shadow = (1.0 - smoothstep(-2.0, 22.0, shadowDist)) * uShadowAlpha;
+    }
 
     if (sd > 1.5) {
         if (shadow < 0.002) {
@@ -138,23 +142,36 @@ void main() {
         }
     }
 
-    vec2 refractedUv = baseUv + centerLens + rimBend + liquidTextureOffset + clickRefract;
+    vec3 refracted;
+    vec3 edgeLight = vec3(0.0);
+    if (uDirectGlass > 0.5) {
+        // Direct compositor-translucent glass: zero static blurred desktop/wallpaper baked inside.
+        // Preserves subtle liquid optic gradients and meniscus edge lensing without clouding live content.
+        float meniscusShade = rimCurve * 0.045 * uRefraction;
+        vec2 liquidShift = liquidTextureOffset * bdSize * 0.008;
+        refracted = vec3(0.11, 0.14, 0.19) + vec3(meniscusShade + liquidShift.x - liquidShift.y);
+    } else {
+        vec2 refractedUv = baseUv + centerLens + rimBend + liquidTextureOffset + clickRefract;
 
-    // 5-tap spectral dispersion concentrated along the curved rim & corners
-    vec2 dispStep = n * pow(edgeT, 2.0) * cornerBoost * (3.4 * uDispersion) * pxToUv;
-    float localFrost = clamp(uFrost + rimCurve * 0.10, 0.0, 1.0);
+        // 5-tap spectral dispersion concentrated along the curved rim & corners
+        vec2 dispStep = n * pow(edgeT, 2.0) * cornerBoost * (3.4 * uDispersion) * pxToUv;
+        float localFrost = clamp(uFrost + rimCurve * 0.10, 0.0, 1.0);
 
-    vec3 c0 = sampleGlass(refractedUv + dispStep * 1.0, localFrost);
-    vec3 c1 = sampleGlass(refractedUv + dispStep * 0.5, localFrost);
-    vec3 c2 = sampleGlass(refractedUv, localFrost);
-    vec3 c3 = sampleGlass(refractedUv - dispStep * 0.5, localFrost);
-    vec3 c4 = sampleGlass(refractedUv - dispStep * 1.0, localFrost);
+        vec3 c0 = sampleGlass(refractedUv + dispStep * 1.0, localFrost);
+        vec3 c1 = sampleGlass(refractedUv + dispStep * 0.5, localFrost);
+        vec3 c2 = sampleGlass(refractedUv, localFrost);
+        vec3 c3 = sampleGlass(refractedUv - dispStep * 0.5, localFrost);
+        vec3 c4 = sampleGlass(refractedUv - dispStep * 1.0, localFrost);
 
-    vec3 refracted = vec3(
-        c0.r * 0.55 + c1.r * 0.45,
-        c1.g * 0.25 + c2.g * 0.50 + c3.g * 0.25,
-        c3.b * 0.45 + c4.b * 0.55
-    );
+        refracted = vec3(
+            c0.r * 0.55 + c1.r * 0.45,
+            c1.g * 0.25 + c2.g * 0.50 + c3.g * 0.25,
+            c3.b * 0.45 + c4.b * 0.55
+        );
+
+        vec2 outerSampleUv = clamp(baseUv + n * 7.0 * pxToUv, vec2(0.001), vec2(0.999));
+        edgeLight = texture(uBlurred, outerSampleUv).rgb;
+    }
 
     float luma = dot(refracted, vec3(0.2126, 0.7152, 0.0722));
     vec3 vibrant = mix(vec3(luma), refracted, 1.18);
@@ -170,8 +187,6 @@ void main() {
     glassColor += vec3(grain);
 
     // Nearby background light reflection for delicate rim caustics
-    vec2 outerSampleUv = clamp(baseUv + n * 7.0 * pxToUv, vec2(0.001), vec2(0.999));
-    vec3 edgeLight = texture(uBlurred, outerSampleUv).rgb;
     float edgeLightLuma = dot(edgeLight, vec3(0.2126, 0.7152, 0.0722));
 
     // Classic slim Liquid Glass diagonal specular shine
@@ -181,7 +196,9 @@ void main() {
     float diagShine = (topLeftGlint + botRightGlint) * (0.95 + 0.25 * abs(n.x * n.y) * 2.0);
 
     float innerKiss = pow(edgeT, 2.9) * smoothstep(0.0, 1.2, depthInside);
-    vec3 causticTint = mix(vec3(0.94, 0.97, 1.0), edgeLight * 1.38 + vec3(0.24), clamp(edgeLightLuma * 0.95, 0.0, 0.70));
+    vec3 causticTint = (uDirectGlass > 0.5)
+        ? vec3(0.94, 0.97, 1.0)
+        : mix(vec3(0.94, 0.97, 1.0), edgeLight * 1.38 + vec3(0.24), clamp(edgeLightLuma * 0.95, 0.0, 0.70));
     float rimScale = (1.0 - clamp(uNoBorder, 0.0, 1.0));
     glassColor += causticTint * innerKiss * (0.04 + 0.11 * diagShine) * uSpecular * rimScale;
 

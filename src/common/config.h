@@ -23,12 +23,12 @@ struct MistbarConfig {
     int border_radius = 14;
 
     // Optical Liquid Glass shader parameters (0..1 floats except blur_radius)
-    int   blur_radius          = 20;     // 0..48 px
-    float refraction_strength  = 0.45f;  // 0.0..1.0
-    float bezel_thickness      = 0.35f;  // 0.0..1.0
-    float chromatic_aberration = 0.25f;  // 0.0..1.0
-    float specular_intensity   = 0.55f;  // 0.0..1.0
-    float tint_opacity         = 0.14f;  // 0.0..1.0
+    int   blur_radius          = 12;     // 0..48 px
+    float refraction_strength  = 0.55f;  // 0.0..1.0
+    float bezel_thickness      = 0.38f;  // 0.0..1.0
+    float chromatic_aberration = 0.46f;  // 0.0..1.0
+    float specular_intensity   = 0.48f;  // 0.0..1.0
+    float tint_opacity         = 0.08f;  // 0.0..1.0
     float glass_opacity        = 0.85f;  // 0.1..1.0
     bool  cursor_reactive      = true;
     bool  gpu_acceleration     = true;
