@@ -118,11 +118,11 @@ public:
     bool is_open() const noexcept { return win_.is_open(); }
 
     void refresh_hw() {
-        wifi_ = mistbar::sysinfo::get_wifi_status(active_cat_ == 0);
-        bt_ = mistbar::sysinfo::get_bluetooth_status(active_cat_ == 1);
-        battery_ = mistbar::sysinfo::get_battery_status(active_cat_ == 2);
-        audio_ = mistbar::sysinfo::get_audio_status(active_cat_ == 7);
-        brightness_ = mistbar::sysinfo::get_brightness_status();
+        if (active_cat_ == 0) wifi_ = mistbar::sysinfo::get_wifi_status(true);
+        else if (active_cat_ == 1) bt_ = mistbar::sysinfo::get_bluetooth_status(true);
+        else if (active_cat_ == 2) battery_ = mistbar::sysinfo::get_battery_status(true);
+        else if (active_cat_ == 7) audio_ = mistbar::sysinfo::get_audio_status(true);
+        else if (active_cat_ == 8) brightness_ = mistbar::sysinfo::get_brightness_status();
         std::string st;
         daemon_running_ = mistbar::ipc::send_command(mistbar::ipc::default_socket_path(), "status", &st);
         daemon_status_ = daemon_running_ ? st : "Not running";
@@ -1534,6 +1534,7 @@ int main(int argc, char** argv) {
 
     std::signal(SIGINT, handle_sig);
     std::signal(SIGTERM, handle_sig);
+    std::signal(SIGPIPE, SIG_IGN);
 
     mistbar::wl::Display dpy;
     if (!dpy.connect()) {

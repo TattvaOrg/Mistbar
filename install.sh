@@ -264,7 +264,7 @@ def remove_mistbar_layer_rules(text):
                 depth -= 1
             pos += 1
         block = text[idx:pos]
-        if 'namespace=\"mistbar\"' in block or \"namespace='mistbar'\" in block:
+        if 'namespace=\"mistbar\"' in block or \"namespace='mistbar'\" in block or 'namespace=\"^mistbar' in block:
             while pos < len(text) and text[pos] in ' \t\r\n':
                 if text[pos] == '\n':
                     pos += 1
@@ -294,8 +294,8 @@ content = ''.join(cleaned)
 
 rule = '''
 layer-rule {
-    match namespace=\"mistbar\"
-    geometry-corner-radius 14
+    match namespace=\"^mistbar\"
+    geometry-corner-radius 16
     background-effect {
         blur true
     }

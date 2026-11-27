@@ -58,6 +58,7 @@ int main(int argc, char** argv) {
 
     std::signal(SIGINT, handle_signal);
     std::signal(SIGTERM, handle_signal);
+    std::signal(SIGPIPE, SIG_IGN);
 
     mistbar::wl::Display display;
     if (!display.connect()) {
@@ -80,38 +81,52 @@ int main(int argc, char** argv) {
     mistbar::log::info("bar", "mistbar-daemon started");
 
     auto last_1s = std::chrono::steady_clock::now();
-    auto last_3s = std::chrono::steady_clock::now();
 
     while (!should_quit && !g_stop_requested) {
-        if (!display.prepare_and_flush()) break;
+        if (!display.prepare_and_flush()) {
+            mistbar::log::warn("bar", "Wayland prepare_and_flush failed; exiting");
+            break;
+        }
 
         const bool animating = app.tick();
         const int timeout_ms = animating ? 16 : 500;
-        pollfd pfds[2]{
+        pollfd pfds[3]{
             {display.fd(), POLLIN, 0},
-            {ipc_srv.fd(), POLLIN, 0}
+            {ipc_srv.fd(), POLLIN, 0},
+            {app.wake_fd(), POLLIN, 0}
         };
-        const nfds_t nfds = (ipc_srv.fd() >= 0) ? 2 : 1;
+        nfds_t nfds = 1;
+        if (ipc_srv.fd() >= 0) pfds[nfds++] = {ipc_srv.fd(), POLLIN, 0};
+        if (app.wake_fd() >= 0) pfds[nfds++] = {app.wake_fd(), POLLIN, 0};
+
         const int pr = ::poll(pfds, nfds, timeout_ms);
         if (pr > 0 && (pfds[0].revents & POLLIN)) {
-            if (!display.dispatch_events()) break;
+            if (!display.dispatch_events()) {
+                mistbar::log::warn("bar", "Wayland dispatch_events failed; exiting");
+                break;
+            }
         } else {
             wl_display_cancel_read(display.handle());
+            if (pr > 0 && (pfds[0].revents & (POLLERR | POLLHUP))) {
+                mistbar::log::warn("bar", "Wayland socket closed; exiting");
+                break;
+            }
         }
 
-        if (nfds == 2 && (pfds[1].revents & POLLIN)) {
-            ipc_srv.poll_once();
+        for (nfds_t i = 1; i < nfds; ++i) {
+            if (pr > 0 && (pfds[i].revents & POLLIN)) {
+                if (pfds[i].fd == ipc_srv.fd()) {
+                    ipc_srv.poll_once();
+                } else if (pfds[i].fd == app.wake_fd()) {
+                    app.apply_worker_updates();
+                }
+            }
         }
 
         const auto now = std::chrono::steady_clock::now();
         if (std::chrono::duration_cast<std::chrono::milliseconds>(now - last_1s).count() >= 1000) {
             last_1s = now;
-            app.refresh_clock_and_niri();
-            app.refresh_hardware_quick();
-        }
-        if (std::chrono::duration_cast<std::chrono::milliseconds>(now - last_3s).count() >= 3000) {
-            last_3s = now;
-            app.refresh_hardware_full();
+            app.refresh_clock_only();
         }
     }
 

@@ -190,11 +190,11 @@ void main() {
     float rim_strength = (0.12 + 0.42 * diag_shine + cursor_spec) * u_specular;
 
     if (u_overlay_only != 0) {
-        vec3 base_col = mix(u_tint_color, vibrant, clamp(u_refraction * rim_curve * 0.24, 0.0, 0.24));
-        vec3 lit_col = base_col + rim_color * (inner_kiss * (0.08 + 0.22 * diag_shine) * u_specular + razor_rim * rim_strength * 0.55) + vec3(grain);
-        float interior_a = clamp(u_tint_opacity * 0.72, 0.02, 0.85);
-        float edge_a = clamp(rim_curve * u_refraction * 0.14 + razor_rim * rim_strength * 0.45 + inner_kiss * 0.18, 0.0, 0.90);
-        float out_a = clamp(max(interior_a, edge_a) * u_glass_opacity, 0.02, 0.94) * shape_alpha;
+        vec3 base_col = mix(u_tint_color, vibrant, clamp(u_refraction * rim_curve * 0.22, 0.0, 0.22));
+        vec3 lit_col = base_col + rim_color * (inner_kiss * (0.08 + 0.22 * diag_shine) * u_specular + razor_rim * rim_strength * 0.60) + vec3(grain);
+        float interior_a = clamp(u_tint_opacity * 0.58, 0.02, 0.55);
+        float edge_a = clamp(rim_curve * u_refraction * 0.14 + razor_rim * rim_strength * 0.48 + inner_kiss * 0.20, 0.0, 0.90);
+        float out_a = clamp(max(interior_a, edge_a) * u_glass_opacity, 0.02, 0.92) * shape_alpha;
         gl_FragColor = vec4(clamp(lit_col, 0.0, 1.0) * out_a, out_a);
     } else {
         vec3 glass_body = mix(vibrant, u_tint_color, clamp(u_tint_opacity * 0.94, 0.0, 1.0));

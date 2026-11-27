@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cmath>
 #include <ctime>
+#include <fcntl.h>
 #include <filesystem>
 #include <linux/input-event-codes.h>
 #include <unistd.h>
@@ -224,6 +225,232 @@ BarApp::BarApp(wl::Display& display)
       trigger_surface_(std::make_unique<wl::LayerSurface>(display)),
       popover_surface_(std::make_unique<wl::LayerSurface>(display)) {}
 
+BarApp::~BarApp() {
+    stop_worker();
+    invalidate_glass_caches();
+}
+
+void BarApp::invalidate_glass_caches() {
+    ++cfg_gen_;
+    if (bar_glass_cache_) {
+        cairo_surface_destroy(bar_glass_cache_);
+        bar_glass_cache_ = nullptr;
+    }
+    if (pop_glass_cache_) {
+        cairo_surface_destroy(pop_glass_cache_);
+        pop_glass_cache_ = nullptr;
+    }
+    bar_cache_w_ = 0;
+    bar_cache_h_ = 0;
+    pop_cache_w_ = 0;
+    pop_cache_h_ = 0;
+}
+
+void BarApp::start_worker() {
+    if (wake_pipe_[0] >= 0) return;
+    if (::pipe2(wake_pipe_, O_NONBLOCK | O_CLOEXEC) != 0) {
+        wake_pipe_[0] = wake_pipe_[1] = -1;
+        return;
+    }
+    worker_stop_ = false;
+    worker_thread_ = std::thread([this]() {
+        int cycle = 0;
+        while (true) {
+            bool want_full = false;
+            bool show_privacy = false;
+            bool show_tray = false;
+            PopoverKind cur_pop = PopoverKind::None;
+            {
+                std::unique_lock<std::mutex> lk(worker_mu_);
+                worker_cv_.wait_for(lk, std::chrono::milliseconds(2000), [this]() {
+                    return worker_stop_ || worker_req_;
+                });
+                if (worker_stop_) break;
+                want_full = worker_full_req_ || (cycle % 3 == 0);
+                worker_req_ = false;
+                worker_full_req_ = false;
+                show_privacy = cfg_.show_privacy;
+                show_tray = cfg_.show_tray;
+                cur_pop = open_popover_;
+            }
+            ++cycle;
+
+            HwSnapshot snap;
+            snap.workspaces = sysinfo::get_niri_workspaces();
+            snap.has_workspaces = true;
+            snap.active_app = sysinfo::get_niri_focused_app();
+            snap.audio = sysinfo::get_audio_status(cur_pop == PopoverKind::Volume);
+            snap.brightness = sysinfo::get_brightness_status();
+            snap.mic_active = show_privacy ? sysinfo::is_mic_active() : false;
+            if (want_full || cur_pop == PopoverKind::ControlCenter) {
+                snap.media = sysinfo::get_media_status();
+            }
+            if (want_full) {
+                snap.has_full = true;
+                snap.wifi = sysinfo::get_wifi_status(cur_pop == PopoverKind::Wifi);
+                snap.bt = sysinfo::get_bluetooth_status(cur_pop == PopoverKind::Bluetooth);
+                snap.battery = sysinfo::get_battery_status(cur_pop == PopoverKind::Battery);
+                snap.tray = show_tray ? sysinfo::get_tray_items() : std::vector<sysinfo::TrayItem>{};
+            }
+
+            {
+                std::lock_guard<std::mutex> lk(worker_mu_);
+                if (worker_stop_) break;
+                pending_hw_ = std::move(snap);
+                has_pending_hw_ = true;
+            }
+            if (wake_pipe_[1] >= 0) {
+                const char b = '1';
+                const ssize_t wr = ::write(wake_pipe_[1], &b, 1);
+                (void)wr;
+            }
+        }
+    });
+}
+
+void BarApp::stop_worker() {
+    {
+        std::lock_guard<std::mutex> lk(worker_mu_);
+        worker_stop_ = true;
+    }
+    worker_cv_.notify_all();
+    if (worker_thread_.joinable()) {
+        worker_thread_.join();
+    }
+    if (wake_pipe_[0] >= 0) { ::close(wake_pipe_[0]); wake_pipe_[0] = -1; }
+    if (wake_pipe_[1] >= 0) { ::close(wake_pipe_[1]); wake_pipe_[1] = -1; }
+}
+
+void BarApp::trigger_async_refresh(bool full) {
+    if (wake_pipe_[0] < 0) return;
+    {
+        std::lock_guard<std::mutex> lk(worker_mu_);
+        worker_req_ = true;
+        if (full) worker_full_req_ = true;
+    }
+    worker_cv_.notify_one();
+}
+
+void BarApp::apply_worker_updates() {
+    char drain[64];
+    while (wake_pipe_[0] >= 0 && ::read(wake_pipe_[0], drain, sizeof(drain)) > 0) {}
+
+    HwSnapshot snap;
+    bool got = false;
+    {
+        std::lock_guard<std::mutex> lk(worker_mu_);
+        if (has_pending_hw_) {
+            snap = std::move(pending_hw_);
+            has_pending_hw_ = false;
+            got = true;
+        }
+    }
+    if (!got) return;
+
+    bool bar_changed = false;
+    bool pop_changed = (open_popover_ != PopoverKind::None);
+
+    if (snap.has_workspaces) {
+        if (snap.workspaces.size() != cached_workspaces_.size()) {
+            bar_changed = true;
+        } else {
+            for (std::size_t i = 0; i < snap.workspaces.size(); ++i) {
+                if (snap.workspaces[i].idx != cached_workspaces_[i].idx ||
+                    snap.workspaces[i].focused != cached_workspaces_[i].focused ||
+                    snap.workspaces[i].has_windows != cached_workspaces_[i].has_windows) {
+                    bar_changed = true;
+                    break;
+                }
+            }
+        }
+        cached_workspaces_ = std::move(snap.workspaces);
+    }
+
+    bool any_windows = false;
+    for (const auto& ws : cached_workspaces_) {
+        if (ws.focused && ws.has_windows) { any_windows = true; break; }
+    }
+    if (!any_windows) {
+        for (const auto& tl : display_.toplevels()) {
+            if (tl.active) { any_windows = true; break; }
+        }
+    }
+    if (any_windows != has_active_windows_) {
+        has_active_windows_ = any_windows;
+        if (cfg_.auto_hide) update_visibility();
+    }
+
+    std::string app = snap.active_app;
+    if (app.empty()) {
+        for (const auto& tl : display_.toplevels()) {
+            if (tl.active) {
+                app = prettify_app_id(tl.app_id.empty() ? tl.title : tl.app_id);
+                break;
+            }
+        }
+    }
+    if (app.empty()) app = "Finder";
+    if (app != cached_active_app_) {
+        cached_active_app_ = std::move(app);
+        bar_changed = true;
+    }
+
+    if (!dragging_volume_) {
+        if (snap.audio.volume_percent != cached_audio_.volume_percent ||
+            snap.audio.muted != cached_audio_.muted) {
+            bar_changed = true;
+        }
+        cached_audio_ = std::move(snap.audio);
+    }
+    if (!dragging_brightness_) {
+        if (snap.brightness.percent != cached_brightness_.percent) {
+            bar_changed = true;
+        }
+        cached_brightness_ = snap.brightness;
+    }
+    if (snap.mic_active != cached_mic_active_) {
+        cached_mic_active_ = snap.mic_active;
+        bar_changed = true;
+    }
+    if (snap.media.active || cached_media_.active) {
+        cached_media_ = std::move(snap.media);
+    }
+
+    if (snap.has_full) {
+        if (snap.wifi.enabled != cached_wifi_.enabled ||
+            snap.wifi.connected != cached_wifi_.connected ||
+            snap.wifi.ssid != cached_wifi_.ssid) {
+            bar_changed = true;
+        }
+        cached_wifi_ = std::move(snap.wifi);
+
+        if (snap.bt.powered != cached_bt_.powered ||
+            snap.bt.connected_name != cached_bt_.connected_name) {
+            bar_changed = true;
+        }
+        cached_bt_ = std::move(snap.bt);
+
+        if (snap.battery.present != cached_battery_.present ||
+            snap.battery.percent != cached_battery_.percent ||
+            snap.battery.charging != cached_battery_.charging) {
+            bar_changed = true;
+        }
+        cached_battery_ = std::move(snap.battery);
+
+        if (snap.tray.size() != cached_tray_.size()) {
+            bar_changed = true;
+        }
+        cached_tray_ = std::move(snap.tray);
+    }
+
+    if (bar_changed) {
+        bar_surface_->request_redraw();
+    }
+    if (pop_changed) {
+        popover_surface_->request_redraw();
+    }
+}
+
 bool BarApp::init() {
     config::ensure_default_config();
     cfg_ = config::load_config();
@@ -276,14 +503,17 @@ bool BarApp::init() {
     popover_surface_->hide();
 
     display_.set_toplevel_change_callback([this]() {
-        refresh_clock_and_niri();
-        bar_surface_->request_redraw();
+        trigger_async_refresh(false);
     });
 
+    cached_clock_ = format_clock_str(cfg_);
+    cached_full_date_ = format_full_date_str();
+    cached_active_app_ = "Finder";
+
     apply_geometry();
-    refresh_clock_and_niri();
-    refresh_hardware_full();
     update_visibility();
+    start_worker();
+    trigger_async_refresh(true);
     return true;
 }
 
@@ -299,18 +529,25 @@ void BarApp::apply_geometry() {
 }
 
 void BarApp::reload_config() {
-    cfg_ = config::load_config();
+    {
+        std::lock_guard<std::mutex> lk(worker_mu_);
+        cfg_ = config::load_config();
+    }
     palette_ = themes::resolve_palette(cfg_);
     backdrop_.init(cfg_);
     icons_.clear();
+    invalidate_glass_caches();
     const auto out = display_.primary_output();
     backdrop_.load_wallpaper(palette_.wallpaper_path, out.width, out.height, palette_.blur_radius);
+    cached_clock_ = format_clock_str(cfg_);
+    cached_full_date_ = format_full_date_str();
     apply_geometry();
     update_visibility();
     bar_surface_->request_redraw();
     if (open_popover_ != PopoverKind::None) {
         popover_surface_->request_redraw();
     }
+    trigger_async_refresh(true);
 }
 
 void BarApp::update_visibility() {
@@ -374,70 +611,27 @@ bool BarApp::tick() {
     return animating || grace_active_;
 }
 
+void BarApp::refresh_clock_only() {
+    const std::string next_clock = format_clock_str(cfg_);
+    if (next_clock != cached_clock_) {
+        cached_clock_ = next_clock;
+        cached_full_date_ = format_full_date_str();
+        bar_surface_->request_redraw();
+    }
+}
+
 void BarApp::refresh_clock_and_niri() {
     cached_clock_ = format_clock_str(cfg_);
     cached_full_date_ = format_full_date_str();
-    cached_workspaces_ = sysinfo::get_niri_workspaces();
-
-    bool any_windows = false;
-    for (const auto& ws : cached_workspaces_) {
-        if (ws.focused && ws.has_windows) {
-            any_windows = true;
-            break;
-        }
-    }
-    if (!any_windows) {
-        for (const auto& tl : display_.toplevels()) {
-            if (tl.active) {
-                any_windows = true;
-                break;
-            }
-        }
-    }
-    has_active_windows_ = any_windows;
-
-    std::string app = sysinfo::get_niri_focused_app();
-    if (app.empty()) {
-        for (const auto& tl : display_.toplevels()) {
-            if (tl.active) {
-                app = prettify_app_id(tl.app_id.empty() ? tl.title : tl.app_id);
-                break;
-            }
-        }
-    }
-    cached_active_app_ = app.empty() ? "Finder" : app;
-
-    if (cfg_.auto_hide) {
-        update_visibility();
-    }
+    trigger_async_refresh(false);
 }
 
 void BarApp::refresh_hardware_quick() {
-    cached_audio_ = sysinfo::get_audio_status(open_popover_ == PopoverKind::Volume);
-    cached_brightness_ = sysinfo::get_brightness_status();
-    cached_mic_active_ = cfg_.show_privacy ? sysinfo::is_mic_active() : false;
-    if (open_popover_ == PopoverKind::ControlCenter) {
-        cached_media_ = sysinfo::get_media_status();
-    }
-    bar_surface_->request_redraw();
-    if (open_popover_ != PopoverKind::None) {
-        popover_surface_->request_redraw();
-    }
+    trigger_async_refresh(false);
 }
 
 void BarApp::refresh_hardware_full() {
-    cached_wifi_ = sysinfo::get_wifi_status(open_popover_ == PopoverKind::Wifi);
-    cached_bt_ = sysinfo::get_bluetooth_status(open_popover_ == PopoverKind::Bluetooth);
-    cached_battery_ = sysinfo::get_battery_status(open_popover_ == PopoverKind::Battery);
-    cached_audio_ = sysinfo::get_audio_status(open_popover_ == PopoverKind::Volume);
-    cached_brightness_ = sysinfo::get_brightness_status();
-    cached_media_ = sysinfo::get_media_status();
-    cached_tray_ = cfg_.show_tray ? sysinfo::get_tray_items() : std::vector<sysinfo::TrayItem>{};
-    cached_mic_active_ = cfg_.show_privacy ? sysinfo::is_mic_active() : false;
-    bar_surface_->request_redraw();
-    if (open_popover_ != PopoverKind::None) {
-        popover_surface_->request_redraw();
-    }
+    trigger_async_refresh(true);
 }
 
 void BarApp::launch_settings(const std::string& page) {
@@ -508,18 +702,13 @@ void BarApp::open_popover(PopoverKind kind, double anchor_x, const std::string& 
     active_menu_name_ = menu_name;
     hovered_pop_id_.clear();
     dragging_tuner_idx_ = -1;
+    pop_cache_w_ = 0;
+    pop_cache_h_ = 0;
 
-    if (kind == PopoverKind::Wifi) cached_wifi_ = sysinfo::get_wifi_status(true);
-    else if (kind == PopoverKind::Bluetooth) cached_bt_ = sysinfo::get_bluetooth_status(true);
-    else if (kind == PopoverKind::Volume) cached_audio_ = sysinfo::get_audio_status(true);
-    else if (kind == PopoverKind::Battery) cached_battery_ = sysinfo::get_battery_status(true);
-    else if (kind == PopoverKind::Brightness) cached_brightness_ = sysinfo::get_brightness_status();
-    else if (kind == PopoverKind::ControlCenter) {
-        cached_wifi_ = sysinfo::get_wifi_status(false);
-        cached_bt_ = sysinfo::get_bluetooth_status(false);
-        cached_audio_ = sysinfo::get_audio_status(false);
-        cached_brightness_ = sysinfo::get_brightness_status();
-        cached_media_ = sysinfo::get_media_status();
+    if (kind == PopoverKind::Wifi || kind == PopoverKind::Bluetooth ||
+        kind == PopoverKind::Volume || kind == PopoverKind::Battery ||
+        kind == PopoverKind::Brightness || kind == PopoverKind::ControlCenter) {
+        trigger_async_refresh(true);
     } else if (kind == PopoverKind::Spotlight) {
         spotlight_query_.clear();
         spotlight_selected_ = 0;
@@ -598,13 +787,36 @@ void BarApp::render_bar_preview(cairo_t* cr, int w, int h) {
 void BarApp::draw_bar(cairo_t* cr, int w, int h) {
     const double radius = (cfg_.look == "pill") ? static_cast<double>(cfg_.border_radius) : 0.0;
     const bool overlay_only = !palette_.solid_mode;
+    const int ptr_bucket = (cfg_.cursor_reactive && pointer_norm_x_ >= 0.0)
+        ? static_cast<int>(pointer_norm_x_ * 32.0)
+        : -1;
 
-    glass::draw_glass_panel(cr, &backdrop_, 0.0, 0.0,
-                            (cfg_.look == "pill") ? defaults::BAR_SIDE_MARGIN : 0.0,
-                            (cfg_.look == "pill") ? cfg_.bar_margin : 0.0,
-                            static_cast<double>(w), static_cast<double>(h),
-                            radius, palette_, &palette_.bar_bg, overlay_only,
-                            pointer_norm_x_, pointer_norm_y_);
+    if (!bar_glass_cache_ || bar_cache_w_ != w || bar_cache_h_ != h ||
+        bar_cache_gen_ != cfg_gen_ || bar_cache_ptr_bucket_ != ptr_bucket) {
+        if (bar_glass_cache_) cairo_surface_destroy(bar_glass_cache_);
+        bar_glass_cache_ = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, std::max(1, w), std::max(1, h));
+        cairo_t* bcr = cairo_create(bar_glass_cache_);
+        cairo_set_operator(bcr, CAIRO_OPERATOR_CLEAR);
+        cairo_paint(bcr);
+        cairo_set_operator(bcr, CAIRO_OPERATOR_OVER);
+        glass::draw_glass_panel(bcr, &backdrop_, 0.0, 0.0,
+                                (cfg_.look == "pill") ? defaults::BAR_SIDE_MARGIN : 0.0,
+                                (cfg_.look == "pill") ? cfg_.bar_margin : 0.0,
+                                static_cast<double>(w), static_cast<double>(h),
+                                radius, palette_, &palette_.bar_bg, overlay_only,
+                                pointer_norm_x_, pointer_norm_y_);
+        cairo_destroy(bcr);
+        bar_cache_w_ = w;
+        bar_cache_h_ = h;
+        bar_cache_gen_ = cfg_gen_;
+        bar_cache_ptr_bucket_ = ptr_bucket;
+    }
+
+    cairo_save(cr);
+    cairo_set_source_surface(cr, bar_glass_cache_, 0.0, 0.0);
+    cairo_paint(cr);
+    cairo_restore(cr);
+
     draw_bar_foreground(cr, w, h);
 }
 
@@ -899,7 +1111,17 @@ void BarApp::handle_bar_pointer(const wl::PointerEvent& ev) {
                 break;
             }
         }
-        if (next_hover != hovered_bar_id_ || cfg_.cursor_reactive) {
+        bool need_redraw = (next_hover != hovered_bar_id_);
+        if (!need_redraw && cfg_.cursor_reactive) {
+            const int bucket = static_cast<int>(pointer_norm_x_ * 32.0);
+            const auto now = std::chrono::steady_clock::now();
+            const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_reactive_draw_).count();
+            if (bucket != bar_cache_ptr_bucket_ && ms >= 40) {
+                last_reactive_draw_ = now;
+                need_redraw = true;
+            }
+        }
+        if (need_redraw) {
             hovered_bar_id_ = next_hover;
             bar_surface_->request_redraw();
         }
@@ -909,11 +1131,15 @@ void BarApp::handle_bar_pointer(const wl::PointerEvent& ev) {
             if (ev.x >= r.x && ev.x <= r.x + r.w) {
                 const int delta = (ev.axis_dy < 0.0) ? 5 : -5;
                 if (r.id == "volume") {
-                    sysinfo::adjust_audio_volume(delta);
-                    refresh_hardware_quick();
+                    cached_audio_.volume_percent = std::clamp(cached_audio_.volume_percent + delta, 0, 100);
+                    sysinfo::spawn_detached({"wpctl", "set-volume", "@DEFAULT_AUDIO_SINK@",
+                                             std::to_string(cached_audio_.volume_percent) + "%"});
+                    bar_surface_->request_redraw();
                 } else if (r.id == "brightness") {
-                    sysinfo::adjust_brightness_percent(delta);
-                    refresh_hardware_quick();
+                    cached_brightness_.percent = std::clamp(cached_brightness_.percent + delta, 5, 100);
+                    sysinfo::spawn_detached({"brightnessctl", "set",
+                                             std::to_string(cached_brightness_.percent) + "%"});
+                    bar_surface_->request_redraw();
                 }
                 break;
             }
@@ -1055,15 +1281,46 @@ void BarApp::draw_popover(cairo_t* cr, int total_w, int total_h) {
     const double w = std::max(1.0, static_cast<double>(total_w) - 2.0 * m);
     const double h = std::max(1.0, static_cast<double>(total_h) - 2.0 * m);
     const double pop_r = (open_popover_ == PopoverKind::Spotlight) ? 20.0 : 18.0;
+    const bool overlay_only = !palette_.solid_mode;
 
-    window::draw_window_shadow(cr, m, m, w, h, pop_r, 18, true);
+    if (!pop_glass_cache_ || pop_cache_w_ != total_w || pop_cache_h_ != total_h || pop_cache_gen_ != cfg_gen_) {
+        if (pop_glass_cache_) cairo_surface_destroy(pop_glass_cache_);
+        pop_glass_cache_ = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, std::max(1, total_w), std::max(1, total_h));
+        cairo_t* pcr = cairo_create(pop_glass_cache_);
+        cairo_set_operator(pcr, CAIRO_OPERATOR_CLEAR);
+        cairo_paint(pcr);
+        cairo_set_operator(pcr, CAIRO_OPERATOR_OVER);
+
+        // Clip OUT the glass interior so drop shadow never darkens translucent Liquid Glass
+        cairo_save(pcr);
+        cairo_new_path(pcr);
+        cairo_rectangle(pcr, 0.0, 0.0, static_cast<double>(total_w), static_cast<double>(total_h));
+        glass::append_rounded_rect(pcr, m, m, w, h, pop_r);
+        cairo_set_fill_rule(pcr, CAIRO_FILL_RULE_EVEN_ODD);
+        cairo_clip(pcr);
+        window::draw_window_shadow(pcr, m, m, w, h, pop_r, 16, true);
+        cairo_restore(pcr);
+
+        cairo_save(pcr);
+        cairo_translate(pcr, m, m);
+        glass::draw_glass_panel(pcr, &backdrop_, 0.0, 0.0, popover_anchor_x_,
+                                static_cast<double>(cfg_.bar_height + 10),
+                                w, h, pop_r, palette_, &palette_.panel_bg, overlay_only);
+        cairo_restore(pcr);
+        cairo_destroy(pcr);
+
+        pop_cache_w_ = total_w;
+        pop_cache_h_ = total_h;
+        pop_cache_gen_ = cfg_gen_;
+    }
+
+    cairo_save(cr);
+    cairo_set_source_surface(cr, pop_glass_cache_, 0.0, 0.0);
+    cairo_paint(cr);
+    cairo_restore(cr);
 
     cairo_save(cr);
     cairo_translate(cr, m, m);
-
-    glass::draw_glass_panel(cr, &backdrop_, 0.0, 0.0, popover_anchor_x_,
-                            static_cast<double>(cfg_.bar_height + 10),
-                            w, h, pop_r, palette_, &palette_.panel_bg, false);
 
     const int pw = static_cast<int>(w);
     switch (open_popover_) {
@@ -1626,8 +1883,15 @@ void BarApp::handle_popover_pointer(const wl::PointerEvent& ev) {
     }
 
     if (ev.type == wl::PointerEvent::Type::ButtonRelease) {
-        dragging_brightness_ = false;
-        dragging_volume_ = false;
+        if (dragging_brightness_) {
+            dragging_brightness_ = false;
+            sysinfo::spawn_detached({"brightnessctl", "set", std::to_string(cached_brightness_.percent) + "%"});
+        }
+        if (dragging_volume_) {
+            dragging_volume_ = false;
+            sysinfo::spawn_detached({"wpctl", "set-volume", "@DEFAULT_AUDIO_SINK@",
+                                     std::to_string(cached_audio_.volume_percent) + "%"});
+        }
         if (dragging_tuner_idx_ >= 0) {
             dragging_tuner_idx_ = -1;
             config::save_config(cfg_);
@@ -1637,6 +1901,18 @@ void BarApp::handle_popover_pointer(const wl::PointerEvent& ev) {
 
     auto slider_pct = [](double x, double sx, double sw) -> int {
         return std::clamp(static_cast<int>(((x - sx) / sw) * 100.0 + 0.5), 1, 100);
+    };
+
+    auto apply_hw_throttled = [&](bool is_vol, int pct, bool force_now) {
+        const auto now = std::chrono::steady_clock::now();
+        const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_hw_cmd_).count();
+        if (!force_now && ms < 45) return;
+        last_hw_cmd_ = now;
+        if (is_vol) {
+            sysinfo::spawn_detached({"wpctl", "set-volume", "@DEFAULT_AUDIO_SINK@", std::to_string(pct) + "%"});
+        } else {
+            sysinfo::spawn_detached({"brightnessctl", "set", std::to_string(pct) + "%"});
+        }
     };
 
     auto apply_tuner_slider = [&](int idx, double x) {
@@ -1649,8 +1925,11 @@ void BarApp::handle_popover_pointer(const wl::PointerEvent& ev) {
         else if (idx == 3) cfg_.specular_intensity = static_cast<float>(n);
         else if (idx == 4) cfg_.tint_opacity = static_cast<float>(n);
         palette_ = themes::resolve_palette(cfg_);
-        const auto out = display_.primary_output();
-        backdrop_.load_wallpaper(palette_.wallpaper_path, out.width, out.height, palette_.blur_radius);
+        invalidate_glass_caches();
+        if (idx == 2) {
+            const auto out = display_.primary_output();
+            backdrop_.load_wallpaper(palette_.wallpaper_path, out.width, out.height, palette_.blur_radius);
+        }
         bar_surface_->request_redraw();
         popover_surface_->request_redraw();
     };
@@ -1664,7 +1943,7 @@ void BarApp::handle_popover_pointer(const wl::PointerEvent& ev) {
             const double sx = (open_popover_ == PopoverKind::ControlCenter) ? 40.0 : 14.0;
             const double sw = (open_popover_ == PopoverKind::ControlCenter) ? 190.0 : (popover_w_ - 28.0);
             cached_brightness_.percent = slider_pct(lx, sx, sw);
-            sysinfo::set_brightness_percent(cached_brightness_.percent);
+            apply_hw_throttled(false, cached_brightness_.percent, false);
             popover_surface_->request_redraw();
             return;
         }
@@ -1672,7 +1951,7 @@ void BarApp::handle_popover_pointer(const wl::PointerEvent& ev) {
             const double sx = (open_popover_ == PopoverKind::ControlCenter) ? 40.0 : 14.0;
             const double sw = (open_popover_ == PopoverKind::ControlCenter) ? 166.0 : (popover_w_ - 28.0);
             cached_audio_.volume_percent = slider_pct(lx, sx, sw);
-            sysinfo::set_audio_volume(cached_audio_.volume_percent);
+            apply_hw_throttled(true, cached_audio_.volume_percent, false);
             popover_surface_->request_redraw();
             bar_surface_->request_redraw();
             return;
@@ -1713,14 +1992,14 @@ void BarApp::handle_popover_pointer(const wl::PointerEvent& ev) {
     if (open_popover_ == PopoverKind::Brightness && ly >= 42.0 && ly <= 72.0 && lx >= 14.0 && lx <= popover_w_ - 14.0) {
         dragging_brightness_ = true;
         cached_brightness_.percent = slider_pct(lx, 14.0, popover_w_ - 28.0);
-        sysinfo::set_brightness_percent(cached_brightness_.percent);
+        apply_hw_throttled(false, cached_brightness_.percent, true);
         popover_surface_->request_redraw();
         return;
     }
     if (open_popover_ == PopoverKind::Volume && ly >= 40.0 && ly <= 70.0 && lx >= 14.0 && lx <= popover_w_ - 14.0) {
         dragging_volume_ = true;
         cached_audio_.volume_percent = slider_pct(lx, 14.0, popover_w_ - 28.0);
-        sysinfo::set_audio_volume(cached_audio_.volume_percent);
+        apply_hw_throttled(true, cached_audio_.volume_percent, true);
         popover_surface_->request_redraw();
         bar_surface_->request_redraw();
         return;
@@ -1729,7 +2008,7 @@ void BarApp::handle_popover_pointer(const wl::PointerEvent& ev) {
         if (lx >= 34.0 && lx <= 214.0 && ly >= 184.0 && ly <= 214.0) {
             dragging_volume_ = true;
             cached_audio_.volume_percent = slider_pct(lx, 40.0, 166.0);
-            sysinfo::set_audio_volume(cached_audio_.volume_percent);
+            apply_hw_throttled(true, cached_audio_.volume_percent, true);
             popover_surface_->request_redraw();
             bar_surface_->request_redraw();
             return;
@@ -1737,7 +2016,7 @@ void BarApp::handle_popover_pointer(const wl::PointerEvent& ev) {
         if (lx >= 34.0 && lx <= 236.0 && ly >= 242.0 && ly <= 272.0) {
             dragging_brightness_ = true;
             cached_brightness_.percent = slider_pct(lx, 40.0, 190.0);
-            sysinfo::set_brightness_percent(cached_brightness_.percent);
+            apply_hw_throttled(false, cached_brightness_.percent, true);
             popover_surface_->request_redraw();
             return;
         }
@@ -1776,38 +2055,59 @@ void BarApp::handle_popover_pointer(const wl::PointerEvent& ev) {
                 sysinfo::niri_action(a.arg);
                 close_popover();
             } else if (a.id == "wifi_toggle") {
-                sysinfo::set_wifi_enabled(!cached_wifi_.enabled);
-                refresh_hardware_full();
+                cached_wifi_.enabled = !cached_wifi_.enabled;
+                if (!cached_wifi_.enabled) { cached_wifi_.connected = false; cached_wifi_.ssid.clear(); }
+                sysinfo::spawn_detached({"nmcli", "radio", "wifi", cached_wifi_.enabled ? "on" : "off"});
+                popover_surface_->request_redraw();
+                bar_surface_->request_redraw();
+                trigger_async_refresh(true);
             } else if (a.id == "wifi_rescan") {
                 sysinfo::rescan_wifi();
-                refresh_hardware_full();
+                trigger_async_refresh(true);
             } else if (a.id == "wifi_connect") {
                 sysinfo::connect_wifi(a.arg);
                 close_popover();
+                trigger_async_refresh(true);
             } else if (a.id == "wifi_disconnect") {
-                sysinfo::disconnect_wifi(a.arg);
-                refresh_hardware_full();
+                sysinfo::spawn_detached({"nmcli", "connection", "down", a.arg});
+                cached_wifi_.connected = false;
+                cached_wifi_.ssid.clear();
+                popover_surface_->request_redraw();
+                bar_surface_->request_redraw();
+                trigger_async_refresh(true);
             } else if (a.id == "bt_toggle") {
-                sysinfo::set_bluetooth_enabled(!cached_bt_.powered);
-                refresh_hardware_full();
+                cached_bt_.powered = !cached_bt_.powered;
+                if (!cached_bt_.powered) cached_bt_.connected_name.clear();
+                sysinfo::spawn_detached({"bluetoothctl", "power", cached_bt_.powered ? "on" : "off"});
+                popover_surface_->request_redraw();
+                bar_surface_->request_redraw();
+                trigger_async_refresh(true);
             } else if (a.id == "bt_connect") {
                 sysinfo::connect_bluetooth_device(a.arg, true);
                 close_popover();
+                trigger_async_refresh(true);
             } else if (a.id == "bt_disconnect") {
                 sysinfo::connect_bluetooth_device(a.arg, false);
                 close_popover();
+                trigger_async_refresh(true);
             } else if (a.id == "mute_toggle") {
-                sysinfo::toggle_audio_mute();
-                refresh_hardware_quick();
+                cached_audio_.muted = !cached_audio_.muted;
+                sysinfo::spawn_detached({"wpctl", "set-mute", "@DEFAULT_AUDIO_SINK@", "toggle"});
+                popover_surface_->request_redraw();
+                bar_surface_->request_redraw();
+                trigger_async_refresh(false);
             } else if (a.id == "sink_set") {
-                sysinfo::set_default_audio_sink(a.arg);
-                refresh_hardware_quick();
+                sysinfo::spawn_detached({"wpctl", "set-default", a.arg});
+                trigger_async_refresh(true);
             } else if (a.id == "bright_set") {
-                sysinfo::set_brightness_percent(std::atoi(a.arg.c_str()));
-                refresh_hardware_quick();
+                cached_brightness_.percent = std::clamp(std::atoi(a.arg.c_str()), 5, 100);
+                sysinfo::spawn_detached({"brightnessctl", "set", std::to_string(cached_brightness_.percent) + "%"});
+                popover_surface_->request_redraw();
             } else if (a.id == "power_profile") {
-                sysinfo::set_power_profile(a.arg);
-                refresh_hardware_full();
+                cached_battery_.power_profile = a.arg;
+                sysinfo::spawn_detached({"powerprofilesctl", "set", a.arg});
+                popover_surface_->request_redraw();
+                trigger_async_refresh(true);
             } else if (a.id == "cc_airdrop") {
                 cfg_.cc_airdrop_on = !cfg_.cc_airdrop_on;
                 config::save_config(cfg_);

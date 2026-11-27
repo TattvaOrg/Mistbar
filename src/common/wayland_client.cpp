@@ -193,7 +193,7 @@ cairo_t* ShmBufferPool::begin_frame(wl_shm* shm, int width, int height) {
     }
 
     int chosen = -1;
-    for (int i = 0; i < 2; ++i) {
+    for (int i = 0; i < 3; ++i) {
         if (!slots_[i].busy) {
             chosen = i;
             break;

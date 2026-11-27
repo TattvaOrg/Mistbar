@@ -97,7 +97,7 @@ private:
         cairo_t* cr = nullptr;
     };
 
-    Slot slots_[2];
+    Slot slots_[3];
     int active_slot_ = -1;
 
     static void on_buffer_release(void* data, wl_buffer* buffer);

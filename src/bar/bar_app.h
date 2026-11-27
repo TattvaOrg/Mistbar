@@ -12,9 +12,12 @@
 
 #include <cairo.h>
 #include <chrono>
+#include <condition_variable>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace mistbar::bar {
@@ -22,16 +25,20 @@ namespace mistbar::bar {
 class BarApp {
 public:
     explicit BarApp(wl::Display& display);
-    ~BarApp() = default;
+    ~BarApp();
 
     BarApp(const BarApp&) = delete;
     BarApp& operator=(const BarApp&) = delete;
 
     bool init();
     void reload_config();
+    void refresh_clock_only();
     void refresh_clock_and_niri();
     void refresh_hardware_quick();
     void refresh_hardware_full();
+    void trigger_async_refresh(bool full = false);
+    void apply_worker_updates();
+    int wake_fd() const noexcept { return wake_pipe_[0]; }
     bool tick();
 
     // IPC command handler returning status/reply string.
@@ -113,6 +120,20 @@ private:
     double pointer_norm_y_ = -1.0;
     std::string hovered_bar_id_;
     std::string hovered_pop_id_;
+    std::chrono::steady_clock::time_point last_reactive_draw_{};
+
+    // Cached glass surfaces to avoid GPU glReadPixels on every hover/slider/clock redraw
+    cairo_surface_t* bar_glass_cache_ = nullptr;
+    int bar_cache_w_ = 0;
+    int bar_cache_h_ = 0;
+    int bar_cache_ptr_bucket_ = -2;
+    std::uint64_t bar_cache_gen_ = 0;
+
+    cairo_surface_t* pop_glass_cache_ = nullptr;
+    int pop_cache_w_ = 0;
+    int pop_cache_h_ = 0;
+    std::uint64_t pop_cache_gen_ = 0;
+    std::uint64_t cfg_gen_ = 1;
 
     // Popover state
     PopoverKind open_popover_ = PopoverKind::None;
@@ -123,6 +144,37 @@ private:
     bool dragging_brightness_ = false;
     bool dragging_volume_ = false;
     int dragging_tuner_idx_ = -1;
+    std::chrono::steady_clock::time_point last_hw_cmd_{};
+
+    // Background worker for non-blocking subprocess polling
+    struct HwSnapshot {
+        bool has_workspaces = false;
+        std::vector<sysinfo::WorkspaceInfo> workspaces;
+        std::string active_app;
+        sysinfo::WifiStatus wifi;
+        sysinfo::BluetoothStatus bt;
+        sysinfo::AudioStatus audio;
+        sysinfo::BrightnessStatus brightness;
+        sysinfo::BatteryStatus battery;
+        sysinfo::MediaStatus media;
+        std::vector<sysinfo::TrayItem> tray;
+        bool mic_active = false;
+        bool has_full = false;
+    };
+
+    int wake_pipe_[2]{-1, -1};
+    std::thread worker_thread_;
+    std::mutex worker_mu_;
+    std::condition_variable worker_cv_;
+    bool worker_stop_ = false;
+    bool worker_req_ = false;
+    bool worker_full_req_ = false;
+    bool has_pending_hw_ = false;
+    HwSnapshot pending_hw_;
+
+    void start_worker();
+    void stop_worker();
+    void invalidate_glass_caches();
 
     // Spotlight state
     std::string spotlight_query_;

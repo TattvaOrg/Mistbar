@@ -113,7 +113,7 @@ void Server::poll_once() {
 
         std::size_t sent = 0;
         while (sent < reply.size()) {
-            const ssize_t n = ::write(client_fd, reply.data() + sent, reply.size() - sent);
+            const ssize_t n = ::send(client_fd, reply.data() + sent, reply.size() - sent, MSG_NOSIGNAL);
             if (n <= 0) {
                 break;
             }
@@ -158,7 +158,7 @@ bool send_command(const std::string& socket_path, const std::string& command, st
 
     std::size_t sent = 0;
     while (sent < payload.size()) {
-        const ssize_t n = ::write(fd, payload.data() + sent, payload.size() - sent);
+        const ssize_t n = ::send(fd, payload.data() + sent, payload.size() - sent, MSG_NOSIGNAL);
         if (n <= 0) {
             ::close(fd);
             return false;
