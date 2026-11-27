@@ -72,6 +72,7 @@ add_library(mistbar_core STATIC
     src/themes/theme.cpp
     src/glass/blur/gaussian_blur.cpp
     src/glass/blur/gl_blur.cpp
+    src/glass/blur/mizzle_renderer.cpp
     src/glass/specular/specular.cpp
     src/glass/translucent/glass_panel.cpp
     src/window/buttons/traffic_lights.cpp
@@ -139,5 +140,6 @@ add_test(NAME mistbar_unit_tests COMMAND mistbar_tests)
 
 install(TARGETS mistbar-daemon mistbar-settings RUNTIME DESTINATION bin)
 install(DIRECTORY icons DESTINATION share/mistbar)
+install(DIRECTORY shaders DESTINATION share/mistbar)
 install(FILES data/mistbar.desktop DESTINATION share/applications)
 install(FILES icons/mistbar-logo.svg DESTINATION share/icons/hicolor/scalable/apps RENAME mistbar.svg)

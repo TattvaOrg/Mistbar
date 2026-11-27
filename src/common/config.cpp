@@ -17,12 +17,31 @@ void apply_glass_preset(MistbarConfig& cfg, const std::string& preset_name) {
     if (preset_name == "frosted") {
         cfg.glass_preset         = "frosted";
         cfg.blur_radius          = 30;
-        cfg.refraction_strength  = 0.30f;
-        cfg.bezel_thickness      = 0.28f;
-        cfg.chromatic_aberration = 0.15f;
+        cfg.refraction_strength  = 0.45f;
+        cfg.bezel_thickness      = 0.35f;
+        cfg.chromatic_aberration = 0.34f;
         cfg.specular_intensity   = 0.45f;
-        cfg.tint_opacity         = 0.34f;
+        cfg.tint_opacity         = 0.20f;
         cfg.glass_opacity        = 0.90f;
+    } else if (preset_name == "smoked") {
+        cfg.glass_preset         = "smoked";
+        cfg.theme                = "dark";
+        cfg.blur_radius          = 20;
+        cfg.refraction_strength  = 0.52f;
+        cfg.bezel_thickness      = 0.38f;
+        cfg.chromatic_aberration = 0.44f;
+        cfg.specular_intensity   = 0.46f;
+        cfg.tint_opacity         = 0.30f;
+        cfg.glass_opacity        = 0.88f;
+    } else if (preset_name == "aqua") {
+        cfg.glass_preset         = "aqua";
+        cfg.blur_radius          = 14;
+        cfg.refraction_strength  = 0.62f;
+        cfg.bezel_thickness      = 0.42f;
+        cfg.chromatic_aberration = 0.54f;
+        cfg.specular_intensity   = 0.54f;
+        cfg.tint_opacity         = 0.14f;
+        cfg.glass_opacity        = 0.84f;
     } else if (preset_name == "dark") {
         cfg.glass_preset         = "dark";
         cfg.theme                = "dark";
@@ -35,13 +54,13 @@ void apply_glass_preset(MistbarConfig& cfg, const std::string& preset_name) {
         cfg.glass_opacity        = 0.88f;
     } else if (preset_name == "clear" || preset_name == "transparent") {
         cfg.glass_preset         = "clear";
-        cfg.blur_radius          = 8;
+        cfg.blur_radius          = 12;
         cfg.refraction_strength  = 0.65f;
         cfg.bezel_thickness      = 0.42f;
-        cfg.chromatic_aberration = 0.40f;
-        cfg.specular_intensity   = 0.72f;
-        cfg.tint_opacity         = 0.06f;
-        cfg.glass_opacity        = 0.45f;
+        cfg.chromatic_aberration = 0.46f;
+        cfg.specular_intensity   = 0.50f;
+        cfg.tint_opacity         = 0.08f;
+        cfg.glass_opacity        = 0.82f;
     } else if (preset_name == "solid") {
         cfg.glass_preset         = "solid";
         cfg.blur_radius          = 0;

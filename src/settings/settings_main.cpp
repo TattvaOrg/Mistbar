@@ -1190,6 +1190,43 @@ private:
             cairo_stroke(cr);
             ry += 138.0;
 
+            draw_section_label("GLASS MATERIAL PRESETS");
+            draw_grouped_card({
+                {"Material Preset", "Mizzle Dual-Kawase optical preset",
+                 [&](cairo_t* c, double rx, double rry, double rw, double rh) {
+                     static const char* kIds[5] = {"clear", "frosted", "smoked", "aqua", "solid"};
+                     static const char* kNames[5] = {"Clear", "Frosted", "Smoked", "Aqua", "Solid"};
+                     const double gap = 6.0;
+                     const double pw = 56.0;
+                     const double ph = 26.0;
+                     const double start_x = rx + rw - 16.0 - (5.0 * pw + 4.0 * gap);
+                     const double py = rry + (rh - ph) * 0.5;
+                     for (int i = 0; i < 5; ++i) {
+                         const double px = start_x + static_cast<double>(i) * (pw + gap);
+                         const bool sel = (cfg_.glass_preset == kIds[i]) ||
+                                          (i == 0 && cfg_.glass_preset == "regular") ||
+                                          (i == 2 && cfg_.glass_preset == "dark");
+                         mistbar::glass::append_rounded_rect(c, px, py, pw, ph, 13.0);
+                         if (sel) {
+                             cairo_set_source_rgba(c, pal.accent.r, pal.accent.g, pal.accent.b, 0.92);
+                         } else {
+                             cairo_set_source_rgba(c, 1.0, 1.0, 1.0, 0.08);
+                         }
+                         cairo_fill(c);
+                         mistbar::window::draw_pango_text_centered(
+                             c, kNames[i], px, py, pw, ph, 7.6, sel,
+                             sel ? mistbar::themes::Color{1.0, 1.0, 1.0, 1.0} : pal.text_primary, true, false);
+                         if (py + ph > body_top && py < body_bottom) {
+                             const std::string pid = kIds[i];
+                             clicks_.push_back({px, std::max(body_top, py), pw, ph, [this, pid]() {
+                                 mistbar::config::apply_glass_preset(cfg_, pid);
+                                 save_and_reload();
+                             }});
+                         }
+                     }
+                 }, nullptr, 46.0}
+            });
+
             draw_section_label("OPTICAL SHADER CONTROLS");
             draw_slider_group({
                 {"Blur / Frost Radius", std::to_string(cfg_.blur_radius) + " px",
@@ -1232,7 +1269,7 @@ private:
                 make_toggle_row("Cursor-Reactive Specular Lighting", "Specular glow tracks cursor across glass",
                                 cfg_.cursor_reactive, [this]() { cfg_.cursor_reactive = !cfg_.cursor_reactive; save_and_reload(); }),
                 make_action_row("Restore Default Glass Optics", "", "Reset", false, [this]() {
-                    mistbar::config::apply_glass_preset(cfg_, "regular");
+                    mistbar::config::apply_glass_preset(cfg_, "clear");
                     cfg_.bar_height = 26;
                     cfg_.bar_margin = 6;
                     cfg_.border_radius = 14;

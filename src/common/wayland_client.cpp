@@ -49,6 +49,7 @@ struct ScreencopyState {
 void sc_buffer(void* data, struct zwlr_screencopy_frame_v1* frame,
                std::uint32_t format, std::uint32_t width, std::uint32_t height, std::uint32_t stride) {
     auto* st = static_cast<ScreencopyState*>(data);
+    if (st->buffer_ready || st->failed) return;
     st->format = format;
     st->width = width;
     st->height = height;
@@ -280,6 +281,7 @@ Surface::Surface(Display& display) : display_(display) {
 }
 
 Surface::~Surface() {
+    cancel_frame_callback();
     shm_pool_.destroy();
     if (wl_surface_) {
         display_.unregister_surface(wl_surface_);
@@ -288,8 +290,16 @@ Surface::~Surface() {
     }
 }
 
+void Surface::cancel_frame_callback() {
+    if (frame_cb_) {
+        wl_callback_destroy(frame_cb_);
+        frame_cb_ = nullptr;
+    }
+    frame_pending_ = false;
+}
+
 void Surface::request_redraw() {
-    if (!visible_ || !configured_) {
+    if (!visible_ || !configured_ || awaiting_configure_) {
         redraw_pending_ = true;
         return;
     }
@@ -301,8 +311,18 @@ void Surface::request_redraw() {
 }
 
 void Surface::render_now() {
-    if (!wl_surface_ || !configured_ || !visible_ || width_ <= 0 || height_ <= 0) {
+    if (!wl_surface_ || !configured_ || awaiting_configure_ || !visible_ || width_ <= 0 || height_ <= 0) {
+        redraw_pending_ = true;
         return;
+    }
+    if (on_egl_draw_) {
+        wl_surface_set_buffer_scale(wl_surface_, scale_);
+        schedule_frame_callback();
+        if (on_egl_draw_(wl_surface_, width_, height_, scale_)) {
+            redraw_pending_ = false;
+            return;
+        }
+        // Fallback to SHM below if EGL callback declined
     }
     const int px_w = width_ * scale_;
     const int px_h = height_ * scale_;
@@ -331,16 +351,20 @@ void Surface::schedule_frame_callback() {
     if (!wl_surface_ || frame_pending_) return;
     wl_callback* cb = wl_surface_frame(wl_surface_);
     if (cb) {
+        frame_cb_ = cb;
         frame_pending_ = true;
         wl_callback_add_listener(cb, &frame_listener_, this);
     }
 }
 
 void Surface::on_frame_done(void* data, wl_callback* cb, std::uint32_t) {
-    wl_callback_destroy(cb);
     auto* self = static_cast<Surface*>(data);
+    if (self->frame_cb_ == cb) {
+        self->frame_cb_ = nullptr;
+    }
+    wl_callback_destroy(cb);
     self->frame_pending_ = false;
-    if (self->redraw_pending_ && self->visible_ && self->configured_) {
+    if (self->redraw_pending_ && self->visible_ && self->configured_ && !self->awaiting_configure_) {
         self->render_now();
     }
 }
@@ -350,6 +374,9 @@ void Surface::on_surface_enter(void* data, wl_surface*, wl_output* output) {
     const int new_scale = self->display_.output_scale(output);
     if (new_scale != self->scale_) {
         self->scale_ = new_scale;
+        if (self->on_resize_ && self->configured_ && self->width_ > 0 && self->height_ > 0) {
+            self->on_resize_(self->wl_surface_, self->width_, self->height_, self->scale_);
+        }
         self->request_redraw();
     }
 }
@@ -385,6 +412,10 @@ bool LayerSurface::create(const std::string& ns,
         log::error("wayland", "Cannot create layer surface: wlr-layer-shell unavailable");
         return false;
     }
+    if (layer_surface_) {
+        zwlr_layer_surface_v1_destroy(layer_surface_);
+        layer_surface_ = nullptr;
+    }
     namespace_ = ns;
     layer_ = layer;
     anchors_ = anchors;
@@ -393,6 +424,8 @@ bool LayerSurface::create(const std::string& ns,
     exclusive_zone_ = exclusive_zone;
     kb_mode_ = kb_mode;
     output_ = output;
+    configured_ = false;
+    awaiting_configure_ = true;
 
     layer_surface_ = zwlr_layer_shell_v1_get_layer_surface(
         display_.layer_shell(), wl_surface_, output_,
@@ -412,6 +445,22 @@ bool LayerSurface::create(const std::string& ns,
     return true;
 }
 
+void LayerSurface::set_geometry(int width, int height, int top, int right, int bottom, int left, int exclusive_zone) {
+    const bool size_changed = (width != req_width_ || height != req_height_);
+    req_width_ = width;
+    req_height_ = height;
+    exclusive_zone_ = exclusive_zone;
+    if (!layer_surface_) return;
+    if (size_changed) {
+        awaiting_configure_ = true;
+    }
+    zwlr_layer_surface_v1_set_size(layer_surface_, static_cast<std::uint32_t>(width),
+                                   static_cast<std::uint32_t>(height));
+    zwlr_layer_surface_v1_set_margin(layer_surface_, top, right, bottom, left);
+    zwlr_layer_surface_v1_set_exclusive_zone(layer_surface_, exclusive_zone);
+    wl_surface_commit(wl_surface_);
+}
+
 void LayerSurface::set_margin(int top, int right, int bottom, int left) {
     if (!layer_surface_) return;
     zwlr_layer_surface_v1_set_margin(layer_surface_, top, right, bottom, left);
@@ -426,9 +475,13 @@ void LayerSurface::set_exclusive_zone(int zone) {
 }
 
 void LayerSurface::set_size(int width, int height) {
+    const bool size_changed = (width != req_width_ || height != req_height_);
     req_width_ = width;
     req_height_ = height;
     if (!layer_surface_) return;
+    if (size_changed) {
+        awaiting_configure_ = true;
+    }
     zwlr_layer_surface_v1_set_size(layer_surface_, static_cast<std::uint32_t>(width),
                                    static_cast<std::uint32_t>(height));
     wl_surface_commit(wl_surface_);
@@ -443,6 +496,8 @@ void LayerSurface::set_keyboard_mode(KeyboardMode kb_mode) {
 
 void LayerSurface::hide() {
     visible_ = false;
+    redraw_pending_ = false;
+    cancel_frame_callback();
     if (wl_surface_) {
         wl_surface_attach(wl_surface_, nullptr, 0, 0);
         wl_surface_commit(wl_surface_);
@@ -451,8 +506,14 @@ void LayerSurface::hide() {
 
 void LayerSurface::show() {
     visible_ = true;
-    if (configured_) {
+    if (configured_ && !awaiting_configure_) {
         render_now();
+    } else {
+        redraw_pending_ = true;
+        if (wl_surface_ && layer_surface_ && !awaiting_configure_) {
+            awaiting_configure_ = true;
+            wl_surface_commit(wl_surface_);
+        }
     }
 }
 
@@ -463,6 +524,10 @@ void LayerSurface::on_configure(void* data, zwlr_layer_surface_v1* surf,
     self->width_ = (w > 0) ? static_cast<int>(w) : self->req_width_;
     self->height_ = (h > 0) ? static_cast<int>(h) : self->req_height_;
     self->configured_ = true;
+    self->awaiting_configure_ = false;
+    if (self->on_resize_ && self->width_ > 0 && self->height_ > 0) {
+        self->on_resize_(self->wl_surface_, self->width_, self->height_, self->scale_);
+    }
     if (self->visible_) {
         self->render_now();
     }
@@ -471,6 +536,13 @@ void LayerSurface::on_configure(void* data, zwlr_layer_surface_v1* surf,
 void LayerSurface::on_closed(void* data, zwlr_layer_surface_v1*) {
     auto* self = static_cast<LayerSurface*>(data);
     self->visible_ = false;
+    self->configured_ = false;
+    self->awaiting_configure_ = false;
+    self->cancel_frame_callback();
+    if (self->layer_surface_) {
+        zwlr_layer_surface_v1_destroy(self->layer_surface_);
+        self->layer_surface_ = nullptr;
+    }
     if (self->on_close_) {
         self->on_close_();
     }

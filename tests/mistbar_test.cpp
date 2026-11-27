@@ -5,6 +5,7 @@
 #include "common/svg_loader.h"
 #include "glass/blur/gaussian_blur.h"
 #include "glass/blur/gl_blur.h"
+#include "glass/blur/mizzle_renderer.h"
 #include "themes/theme.h"
 
 #include <cstdlib>
@@ -44,6 +45,14 @@ void test_config_presets() {
     MISTBAR_CHECK(cfg.glass_preset == "clear");
     MISTBAR_CHECK(cfg.refraction_strength > 0.6f);
 
+    mistbar::config::apply_glass_preset(cfg, "smoked");
+    MISTBAR_CHECK(cfg.glass_preset == "smoked");
+    MISTBAR_CHECK(cfg.tint_opacity > 0.2f);
+
+    mistbar::config::apply_glass_preset(cfg, "aqua");
+    MISTBAR_CHECK(cfg.glass_preset == "aqua");
+    MISTBAR_CHECK(cfg.refraction_strength > 0.55f);
+
     mistbar::config::apply_glass_preset(cfg, "solid");
     MISTBAR_CHECK(cfg.glass_preset == "solid");
     MISTBAR_CHECK(cfg.blur_radius == 0);
@@ -51,6 +60,32 @@ void test_config_presets() {
 
     auto pal = mistbar::themes::resolve_palette(cfg);
     MISTBAR_CHECK(pal.solid_mode == true);
+}
+
+void test_mizzle_renderer_offscreen() {
+    mistbar::glass::MizzleRenderer mr;
+    if (mr.init(nullptr)) {
+        cairo_surface_t* bd = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 128, 128);
+        cairo_t* bcr = cairo_create(bd);
+        cairo_set_source_rgba(bcr, 0.15, 0.45, 0.85, 1.0);
+        cairo_paint(bcr);
+        cairo_destroy(bcr);
+
+        mr.set_backdrop_cairo(bd);
+        MISTBAR_CHECK(mr.has_backdrop());
+
+        cairo_surface_t* ui = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 128, 128);
+        cairo_surface_t* out = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 128, 128);
+        std::vector<mistbar::glass::GlassPanelSpec> panels;
+        panels.push_back({10.0f, 10.0f, 108.0f, 44.0f, 22.0f, true, false, {}});
+        auto mat = mistbar::glass::make_glass_material({"clear", 12, 0.65f, 0.46f, 0.50f, 0.08f, 0.82f});
+        MISTBAR_CHECK(mr.render_to_cairo(out, 0.0f, 0.0f, 0.0f, {}, mat, panels, ui));
+
+        cairo_surface_destroy(out);
+        cairo_surface_destroy(ui);
+        cairo_surface_destroy(bd);
+        mr.shutdown();
+    }
 }
 
 void test_gaussian_blur_and_liquid_glass() {
@@ -135,6 +170,7 @@ int main() {
     test_json_roundtrip();
     test_config_presets();
     test_gaussian_blur_and_liquid_glass();
+    test_mizzle_renderer_offscreen();
     test_svg_icons();
     std::cout << "All Mistbar unit tests passed.\n";
     return 0;
