@@ -183,8 +183,8 @@ private:
     bool live_backdrop_captured_ = false;
     int tuner_top_m_ = 60;
     int tuner_left_m_ = 18;
-    int tuner_w_ = 286;
-    int tuner_h_ = 310;
+    int tuner_w_ = 296;
+    int tuner_h_ = 324;
     std::string hovered_tuner_id_;
     std::vector<PopAction> tuner_actions_;
 
@@ -257,6 +257,7 @@ private:
     void queue_recapture_and_open_tuner(double anchor_x);
     void launch_settings(const std::string& page = "");
     void rebuild_spotlight_matches();
+    void apply_tuner_slider(int idx, double x, int panel_w);
 
     bool use_direct_glass() const;
     glass::GlassMaterial current_glass_material() const;

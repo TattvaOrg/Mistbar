@@ -11,6 +11,7 @@ struct MistbarConfig {
     // Theme and geometry
     std::string theme            = "dark";       // "dark" | "light"
     std::string glass_preset     = "clear";      // "clear" | "frosted" | "smoked" | "aqua" | "regular" | "dark" | "solid"
+    std::string shader_style     = "mizzle";     // "mizzle" | "overshifted"
     std::string look             = "attached";   // "attached" | "pill"
     std::string icon_style       = "default";    // "default" | "dark" | "clear" | "tinted"
     std::string accent_color     = "#0A84FF";
