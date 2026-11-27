@@ -3,12 +3,18 @@
 #include "bar/bar_app.h"
 #include "common/ipc.h"
 #include "common/logger.h"
+#include "common/xdg.h"
 
+#include <cerrno>
 #include <chrono>
 #include <csignal>
 #include <cstring>
+#include <fcntl.h>
+#include <iostream>
 #include <poll.h>
 #include <string>
+#include <sys/file.h>
+#include <unistd.h>
 
 namespace {
 volatile sig_atomic_t g_stop_requested = 0;
@@ -16,14 +22,42 @@ volatile sig_atomic_t g_stop_requested = 0;
 void handle_signal(int) {
     g_stop_requested = 1;
 }
+
+int acquire_single_instance_lock() {
+    const std::string dir = mistbar::xdg::runtime_dir();
+    mistbar::xdg::ensure_dir(dir);
+    const std::string lock_path = dir + "/bar.lock";
+    const int fd = ::open(lock_path.c_str(), O_CREAT | O_RDWR | O_CLOEXEC, 0644);
+    if (fd < 0) return -1;
+    if (::flock(fd, LOCK_EX | LOCK_NB) < 0) {
+        const int err = errno;
+        ::close(fd);
+        errno = err;
+        return -2;
+    }
+    return fd;
+}
 } // namespace
 
 int main(int argc, char** argv) {
     mistbar::log::init();
 
-    // Offscreen visual verification mode: renders bar + Control Center over backdrop to PNG.
-    for (int i = 1; i + 1 < argc; ++i) {
-        if (std::strcmp(argv[i], "--dump-png") == 0) {
+    // Parse CLI flags before touching Wayland or spawning a bar surface.
+    for (int i = 1; i < argc; ++i) {
+        const char* arg = argv[i];
+        if (std::strcmp(arg, "-h") == 0 || std::strcmp(arg, "--help") == 0) {
+            std::cout << "Usage: mistbar-daemon [--dump-png <path>] [--version] [--help]\n";
+            return 0;
+        }
+        if (std::strcmp(arg, "-v") == 0 || std::strcmp(arg, "--version") == 0) {
+            std::cout << "mistbar-daemon " << MISTBAR_VERSION << "\n";
+            return 0;
+        }
+        if (std::strcmp(arg, "--dump-png") == 0) {
+            if (i + 1 >= argc) {
+                std::cerr << "Error: --dump-png requires an output path.\n";
+                return 1;
+            }
             mistbar::wl::Display dummy_dpy;
             mistbar::bar::BarApp preview_app(dummy_dpy);
             cairo_surface_t* canvas = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 1280, 500);
@@ -54,6 +88,14 @@ int main(int argc, char** argv) {
             cairo_surface_destroy(canvas);
             return 0;
         }
+        std::cerr << "Unknown argument '" << arg << "'. Use --help for usage.\n";
+        return 1;
+    }
+
+    const int lock_fd = acquire_single_instance_lock();
+    if (lock_fd == -2) {
+        std::cerr << "mistbar-daemon is already running.\n";
+        return 0;
     }
 
     std::signal(SIGINT, handle_signal);
@@ -63,12 +105,14 @@ int main(int argc, char** argv) {
     mistbar::wl::Display display;
     if (!display.connect()) {
         mistbar::log::error("bar", "Could not connect to Wayland display");
+        if (lock_fd >= 0) ::close(lock_fd);
         return 1;
     }
 
     mistbar::bar::BarApp app(display);
     if (!app.init()) {
         mistbar::log::error("bar", "Could not initialize Wayland bar surface");
+        if (lock_fd >= 0) ::close(lock_fd);
         return 1;
     }
 
@@ -132,6 +176,7 @@ int main(int argc, char** argv) {
     }
 
     ipc_srv.stop();
+    if (lock_fd >= 0) ::close(lock_fd);
     mistbar::log::info("bar", "mistbar-daemon exiting");
     return 0;
 }
