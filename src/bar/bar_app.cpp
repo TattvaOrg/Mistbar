@@ -1156,17 +1156,28 @@ void BarApp::open_popover(PopoverKind kind, double anchor_x, const std::string& 
 
     const int bar_w = std::max(640, bar_surface_->width());
     const int side_m = (cfg_.look == "pill") ? defaults::BAR_SIDE_MARGIN : 0;
+    const int screen_w = bar_w + side_m * 2;
+    const int edge_pad = (cfg_.look == "pill") ? std::max(10, side_m) : 10;
     const int bar_bottom = ((cfg_.look == "pill") ? cfg_.bar_margin : 0) + cfg_.bar_height;
     const int top_m = bar_bottom + 2;
-    int target_x = static_cast<int>(anchor_x) + side_m - kPopShadowMargin;
-    if (kind == PopoverKind::Spotlight) {
-        target_x = (bar_w - popover_w_) / 2 + side_m - kPopShadowMargin;
-    }
-    const int total_w = popover_w_ + kPopShadowMargin * 2;
-    const int max_left = std::max(0, bar_w + side_m * 2 - total_w);
-    const int left_m = std::clamp(target_x, 0, max_left);
 
-    popover_anchor_x_ = static_cast<double>(left_m + kPopShadowMargin);
+    int panel_x = 0;
+    if (kind == PopoverKind::LogoMenu || kind == PopoverKind::AppMenu) {
+        panel_x = static_cast<int>(anchor_x) + side_m;
+    } else if (kind == PopoverKind::Spotlight) {
+        panel_x = (screen_w - popover_w_) / 2;
+    } else if (kind == PopoverKind::ControlCenter || kind == PopoverKind::Calendar ||
+               kind == PopoverKind::PowerMenu || anchor_x < 0.0) {
+        panel_x = screen_w - edge_pad - popover_w_;
+    } else {
+        panel_x = static_cast<int>(anchor_x) + side_m - popover_w_ / 2;
+    }
+
+    const int max_panel_x = std::max(edge_pad, screen_w - edge_pad - popover_w_);
+    panel_x = std::clamp(panel_x, edge_pad, max_panel_x);
+    const int left_m = std::max(0, panel_x - kPopShadowMargin);
+
+    popover_anchor_x_ = -1.0;
     popover_top_m_ = top_m;
     popover_left_m_ = left_m;
 
@@ -1652,8 +1663,8 @@ void BarApp::draw_bar_foreground(cairo_t* cr, int w, int h) {
         }
     }
 
-    // Right section (placed right-to-left in macOS Tahoe order: Clock, Control Center, Spotlight, Wi-Fi, Battery, optional extras)
-    double rx = static_cast<double>(w) - ((cfg_.look == "pill") ? 12.0 : 12.0);
+    // Right section (exact macOS order right-to-left: Clock, Privacy Dot, Control Center, Spotlight, Battery, Wi-Fi, optional extras, Mic Pill, Tray)
+    double rx = static_cast<double>(w) - 12.0;
 
     if (cfg_.show_power_menu) {
         rx -= 24.0;
@@ -1665,7 +1676,7 @@ void BarApp::draw_bar_foreground(cairo_t* cr, int w, int h) {
         rx -= 4.0;
     }
 
-    // Clock (far right, measured precisely)
+    // Clock / Notification Centre (far right, measured precisely)
     const double clock_tw = window::measure_pango_text_width(cr, cached_clock_, 9.2, false);
     const double clock_w = clock_tw + 14.0;
     rx -= clock_w;
@@ -1674,11 +1685,24 @@ void BarApp::draw_bar_foreground(cairo_t* cr, int w, int h) {
     window::draw_pango_text_centered(cr, cached_clock_, rx + 7.0, 0.0, clock_tw + 2.0,
                                      static_cast<double>(h), 9.2, false, palette_.text_primary);
     bar_hits_.push_back({rx, 0.0, clock_w, static_cast<double>(h), "clock", 0});
-    rx -= 3.0;
 
-    // Control Center
+    // Privacy dot between Control Centre and Clock
+    if (cfg_.show_privacy && cached_mic_active_) {
+        rx -= 7.5;
+        cairo_save(cr);
+        cairo_new_path(cr);
+        cairo_arc(cr, rx + 3.2, static_cast<double>(h) * 0.5, 2.25, 0.0, 6.283185307);
+        cairo_set_source_rgba(cr, 1.0, 0.62, 0.04, 0.98);
+        cairo_fill(cr);
+        cairo_restore(cr);
+        rx -= 2.5;
+    } else {
+        rx -= 3.0;
+    }
+
+    // Control Centre
     if (cfg_.show_control_center) {
-        rx -= 25.0;
+        rx -= 24.0;
         draw_hover_pill(rx, 3.0, 23.0, static_cast<double>(h) - 6.0, "cc",
                         open_popover_ == PopoverKind::ControlCenter);
         const std::string p = icons::resolve_icon("control-center.svg");
@@ -1693,27 +1717,16 @@ void BarApp::draw_bar_foreground(cairo_t* cr, int w, int h) {
         draw_hover_pill(rx, 3.0, 22.0, static_cast<double>(h) - 6.0, "spotlight",
                         open_popover_ == PopoverKind::Spotlight);
         const std::string p = icons::resolve_icon("search.svg");
-        if (!p.empty()) icons_.draw(cr, p, rx + 3.5, icon_y, icon_sz, icon_sz, fg_tint);
+        if (!p.empty()) icons_.draw(cr, p, rx + 3.75, (static_cast<double>(h) - 14.5) * 0.5, 14.5, 14.5, fg_tint);
         bar_hits_.push_back({rx, 0.0, 22.0, static_cast<double>(h), "spotlight", 0});
-        rx -= 3.0;
+        rx -= 4.0;
     }
 
-    // Wi-Fi (next to Search, matching macOS Tahoe screenshot)
-    if (cfg_.show_network) {
-        rx -= 25.0;
-        draw_hover_pill(rx, 3.0, 23.0, static_cast<double>(h) - 6.0, "wifi",
-                        open_popover_ == PopoverKind::Wifi);
-        const std::string p = icons::resolve_icon(cached_wifi_.enabled && cached_wifi_.connected ? "wifi.svg" : "wifi-off.svg");
-        if (!p.empty()) icons_.draw(cr, p, rx + 4.0, icon_y, icon_sz, icon_sz, fg_tint);
-        bar_hits_.push_back({rx, 0.0, 23.0, static_cast<double>(h), "wifi", 0});
-        rx -= 3.0;
-    }
-
-    // Battery with dynamic macOS fill level (next to Wi-Fi, matching Tahoe screenshot)
+    // Battery (macOS HIG status order: Wi-Fi, Battery, Spotlight)
     if (cfg_.show_battery && cached_battery_.present) {
         const std::string pct_str = std::to_string(cached_battery_.percent) + "%";
         const double pct_w = cfg_.show_battery_pct ? window::measure_pango_text_width(cr, pct_str, 8.6, false) + 5.0 : 0.0;
-        const double bw = 26.0 + pct_w;
+        const double bw = 27.0 + pct_w;
         rx -= bw;
         draw_hover_pill(rx, 3.0, bw, static_cast<double>(h) - 6.0, "battery",
                         open_popover_ == PopoverKind::Battery);
@@ -1722,31 +1735,42 @@ void BarApp::draw_bar_foreground(cairo_t* cr, int w, int h) {
                                              static_cast<double>(h), 8.6, false, palette_.text_primary);
         }
         const double bx = rx + pct_w + 3.0;
-        const double by = (static_cast<double>(h) - 10.5) * 0.5;
-        glass::append_rounded_rect(cr, bx, by, 17.5, 10.5, 2.8);
+        const double by = (static_cast<double>(h) - 10.6) * 0.5;
+        glass::append_rounded_rect(cr, bx, by, 18.8, 10.6, 2.9);
         cairo_set_source_rgba(cr, palette_.text_primary.r, palette_.text_primary.g,
-                              palette_.text_primary.b, 0.72);
-        cairo_set_line_width(cr, 1.15);
+                              palette_.text_primary.b, 0.78);
+        cairo_set_line_width(cr, 1.1);
         cairo_stroke(cr);
 
         const double fill_frac = std::clamp(static_cast<double>(cached_battery_.percent) / 100.0, 0.08, 1.0);
-        glass::append_rounded_rect(cr, bx + 2.0, by + 2.0, 13.5 * fill_frac, 6.5, 1.4);
+        glass::append_rounded_rect(cr, bx + 2.2, by + 2.2, 14.4 * fill_frac, 6.2, 1.3);
         if (cached_battery_.charging) {
             cairo_set_source_rgba(cr, 0.19, 0.82, 0.35, 0.96);
         } else if (cached_battery_.percent <= 20) {
             cairo_set_source_rgba(cr, 1.0, 0.27, 0.23, 0.96);
         } else {
             cairo_set_source_rgba(cr, palette_.text_primary.r, palette_.text_primary.g,
-                                  palette_.text_primary.b, 0.94);
+                                  palette_.text_primary.b, 0.96);
         }
         cairo_fill(cr);
 
-        glass::append_rounded_rect(cr, bx + 18.5, by + 3.2, 1.6, 4.1, 0.8);
+        glass::append_rounded_rect(cr, bx + 19.5, by + 3.3, 1.4, 4.0, 0.7);
         cairo_set_source_rgba(cr, palette_.text_primary.r, palette_.text_primary.g,
-                              palette_.text_primary.b, 0.65);
+                              palette_.text_primary.b, 0.72);
         cairo_fill(cr);
 
         bar_hits_.push_back({rx, 0.0, bw, static_cast<double>(h), "battery", 0});
+        rx -= 3.0;
+    }
+
+    // Wi-Fi
+    if (cfg_.show_network) {
+        rx -= 24.0;
+        draw_hover_pill(rx, 3.0, 22.0, static_cast<double>(h) - 6.0, "wifi",
+                        open_popover_ == PopoverKind::Wifi);
+        const std::string p = icons::resolve_icon(cached_wifi_.enabled && cached_wifi_.connected ? "wifi.svg" : "wifi-off.svg");
+        if (!p.empty()) icons_.draw(cr, p, rx + 3.5, icon_y, icon_sz, icon_sz, fg_tint);
+        bar_hits_.push_back({rx, 0.0, 22.0, static_cast<double>(h), "wifi", 0});
         rx -= 3.0;
     }
 
@@ -1789,6 +1813,18 @@ void BarApp::draw_bar_foreground(cairo_t* cr, int w, int h) {
         rx -= 3.0;
     }
 
+    // Privacy Microphone Capsule Indicator (left of Status Menus, matching macOS HIG)
+    if (cfg_.show_privacy && cached_mic_active_) {
+        rx -= 34.0;
+        const double py = (static_cast<double>(h) - 18.0) * 0.5;
+        glass::append_rounded_rect(cr, rx, py, 30.0, 18.0, 9.0);
+        cairo_set_source_rgba(cr, 0.96, 0.56, 0.14, 0.98);
+        cairo_fill(cr);
+        const std::string p = icons::resolve_icon("mic.svg");
+        if (!p.empty()) icons_.draw(cr, p, rx + 9.0, py + 3.0, 12.0, 12.0, 0xFFFFFFFFU);
+        rx -= 4.0;
+    }
+
     // System Tray items
     if (cfg_.show_tray && !cached_tray_.empty()) {
         for (int i = static_cast<int>(cached_tray_.size()) - 1; i >= 0; --i) {
@@ -1809,18 +1845,6 @@ void BarApp::draw_bar_foreground(cairo_t* cr, int w, int h) {
             bar_hits_.push_back({rx, 0.0, 20.0, static_cast<double>(h), "tray", i});
             rx -= 2.0;
         }
-    }
-
-    // Privacy Microphone Indicator
-    if (cfg_.show_privacy && cached_mic_active_) {
-        rx -= 24.0;
-        const double py = (static_cast<double>(h) - 16.0) * 0.5;
-        glass::append_rounded_rect(cr, rx, py, 20.0, 16.0, 8.0);
-        cairo_set_source_rgba(cr, 1.0, 0.58, 0.0, 0.94);
-        cairo_fill(cr);
-        const std::string p = icons::resolve_icon("mic.svg");
-        if (!p.empty()) icons_.draw(cr, p, rx + 4.5, py + 2.5, 11.0, 11.0, 0xFFFFFFFFU);
-        rx -= 4.0;
     }
 }
 
@@ -1907,23 +1931,23 @@ void BarApp::handle_bar_pointer(const wl::PointerEvent& ev) {
                 refresh_clock_and_niri();
                 bar_surface_->request_redraw();
             } else if (r.id == "wifi") {
-                queue_open_popover(PopoverKind::Wifi, r.x - 180.0);
+                queue_open_popover(PopoverKind::Wifi, r.x + r.w * 0.5);
             } else if (r.id == "bluetooth") {
-                queue_open_popover(PopoverKind::Bluetooth, r.x - 180.0);
+                queue_open_popover(PopoverKind::Bluetooth, r.x + r.w * 0.5);
             } else if (r.id == "volume") {
-                queue_open_popover(PopoverKind::Volume, r.x - 180.0);
+                queue_open_popover(PopoverKind::Volume, r.x + r.w * 0.5);
             } else if (r.id == "brightness") {
-                queue_open_popover(PopoverKind::Brightness, r.x - 160.0);
+                queue_open_popover(PopoverKind::Brightness, r.x + r.w * 0.5);
             } else if (r.id == "battery") {
-                queue_open_popover(PopoverKind::Battery, r.x - 160.0);
+                queue_open_popover(PopoverKind::Battery, r.x + r.w * 0.5);
             } else if (r.id == "spotlight") {
-                queue_open_popover(PopoverKind::Spotlight, r.x);
+                queue_open_popover(PopoverKind::Spotlight, 0.0);
             } else if (r.id == "cc") {
-                queue_open_popover(PopoverKind::ControlCenter, r.x - 220.0);
+                queue_open_popover(PopoverKind::ControlCenter, -1.0);
             } else if (r.id == "clock") {
-                queue_open_popover(PopoverKind::Calendar, r.x - 120.0);
+                queue_open_popover(PopoverKind::Calendar, -1.0);
             } else if (r.id == "power") {
-                queue_open_popover(PopoverKind::PowerMenu, r.x - 170.0);
+                queue_open_popover(PopoverKind::PowerMenu, -1.0);
             } else if (r.id == "tray") {
                 const auto idx = static_cast<std::size_t>(r.arg_int);
                 if (idx < cached_tray_.size()) {
@@ -3088,9 +3112,9 @@ void BarApp::handle_popover_key(const wl::KeyEvent& ev) {
                     launch_settings(item.arg);
                     queue_close_popover();
                 } else if (item.action_id == "open_tuner") {
-                    queue_open_popover(PopoverKind::ShaderTuner, std::max(0, bar_surface_->width() - 320));
+                    queue_open_popover(PopoverKind::ShaderTuner, -1.0);
                 } else if (item.action_id == "open_cc") {
-                    queue_open_popover(PopoverKind::ControlCenter, std::max(0, bar_surface_->width() - 290));
+                    queue_open_popover(PopoverKind::ControlCenter, -1.0);
                 } else if (item.action_id == "autohide_toggle") {
                     cfg_.auto_hide = !cfg_.auto_hide;
                     config::save_config(cfg_);
@@ -3263,8 +3287,7 @@ std::string BarApp::handle_ipc(const std::string& cmd, bool& should_quit) {
         return tuner_open_ ? "tuner opened" : "tuner closed";
     }
     if (cmd == "cc" || cmd == "control-center") {
-        const int bar_w = std::max(640, bar_surface_->width());
-        open_popover(PopoverKind::ControlCenter, static_cast<double>(bar_w - 280));
+        open_popover(PopoverKind::ControlCenter, -1.0);
         return "control center toggled";
     }
     if (cmd == "spotlight") {
