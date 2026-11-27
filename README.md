@@ -1,57 +1,171 @@
 # Mistbar
 
-**Native C++20 / GLSL macOS Tahoe Liquid Glass Menu Bar & Desktop Settings App for Wayland**
-
-Mistbar provides an authentic macOS Tahoe top menu bar (`mistbar-daemon`) and a compact boxy macOS-style Desktop Settings application (`mistbar-settings`) built on Wayland (`wlr-layer-shell`, `wlr-foreign-toplevel-management`, `xdg-shell`), Cairo, Pango, `librsvg`, and OpenGL GLSL optical shaders.
+**macOS Tahoe Liquid Glass Top Bar & Black-Only Desktop Settings for Linux (Wayland)**
+- A native C++20 / GLSL Liquid Glass menu bar (`mistbar-daemon`) and pure-black System Settings desktop app (`mistbar-settings`) built on Wayland (`wlr-layer-shell`, `wlr-foreign-toplevel-management`, `xdg-shell`), Cairo, Pango, `librsvg`, and OpenGL shaders.
 
 ## Features
 
-- **Native C++/GLSL Liquid Glass Engine**: SDF rounded-pill refraction, curved bezel dome normals, RGB chromatic dispersion, Fresnel rim reflections, Blinn-Phong specular highlights, cursor-reactive lighting, and separable Gaussian frost blur (with CPU fallback).
-- **Presets & Geometry**: Switch between `Regular`, `Frosted`, `Dark`, `Clear`, and `Solid` presets, `Dark` / `Light` theme modes, `Floating Pill` vs `Attached Edge` geometry, and intelligent `Auto-Hide`.
-- **Mistbar Settings Desktop App**: Compact macOS-style settings window (`mistbar` or `mistbar-settings`) with a live interactive Liquid Glass preview card, optical shader sliders, widget visibility toggles, and live Wi-Fi, Bluetooth, Sound, Display, and About panes that sync instantly via Unix socket IPC.
-- **Authentic macOS Menu Bar Layout & Custom SVGs**:
-  - Left: Minimal Liquid Glass `M` menu (About, Settings, Sleep, Restart, Shut Down, Lock, Log Out), Bold Active App Name, and File / Edit / View / Go / Window / Help menus.
-  - Center: Clickable Niri workspace indicators.
-  - Right: Privacy microphone indicator, D-Bus StatusNotifier system tray, Battery + power profiles, Wi-Fi network switcher, Bluetooth paired devices, Volume + output switcher + scroll wheel, optional Brightness, Spotlight search, macOS Control Center (tiles, capsule sliders, media playback), and Clock + interactive Calendar at the far right.
+- **Native C++20 / GLSL Liquid Glass Engine** - Perimeter meniscus refraction, fluid surface normals, 5-tap spectral chromatic dispersion, anisotropic diagonal specular rim highlights, cursor-reactive lighting, and GPU Gaussian blur (with CPU fallback)
+- **Edge-to-Edge Transparent & Floating Pill Bar** - Switch dynamically between edge-to-edge transparent bar (`attached`) and floating capsule (`pill`), plus `Auto-Hide`
+- **macOS Menu Bar Layout** - Clean `M` menu, bold active app name, File / Edit / View / Go / Window / Help menus (left), optional Niri workspace dots (center), and crisp monochrome status icons + Clock (right)
+- **Slim Control Center & Live Shader Tuner** - `mizzle`-inspired compact Control Center (Wi-Fi, Bluetooth, AirDrop, Focus, Media playback, Sound & Display sliders, 4x2 vector quick actions) with `"Edit Controls"` opening the real-time Shader Tuner
+- **Built-in Liquid Glass Spotlight** - Floating search pill scanning installed `.desktop` applications, Mistbar Settings pages, and quick actions
+- **Black-Only Settings App** - Pure `#000000` obsidian desktop settings window matching macOS Appearance with live Liquid Glass preview, optical sliders, widget toggles, Wi-Fi, Bluetooth, Energy, Sound, Display, and About panes
+- **Real Hardware Backends** - Live integration with `nmcli`, `bluetoothctl`, `wpctl`, `brightnessctl`, `playerctl`, `powerprofilesctl`, and D-Bus StatusNotifier tray
+- **CLI Interface** - `mistbar start/stop/restart/status/update/uninstall` with colored output
 
-## Requirements
+## Dependencies
 
-- Wayland compositor supporting `wlr-layer-shell` (Niri recommended)
-- C++20 compiler, CMake >= 3.20, `wayland-scanner`
-- `wayland-client`, `xkbcommon`, `cairo`, `pangocairo`, `gdk-pixbuf-2.0`, `librsvg-2.0`, `dbus-1`
-- Optional: `wayland-egl`, `egl`, `gl` (for hardware GLSL Liquid Glass), `libsystemd`
-- Runtime tools: `nmcli`, `bluetoothctl`, `wpctl`, `brightnessctl`, `fuzzel`, `playerctl`, `powerprofilesctl`
+| Package | Purpose |
+|---|---|
+| C++20 compiler & CMake (>= 3.20) | Native build |
+| `wayland-client`, `wayland-scanner`, `xkbcommon` | Wayland `wlr-layer-shell` & input |
+| `cairo`, `pangocairo`, `gdk-pixbuf-2.0`, `librsvg-2.0` | Vector UI & SVG icon rendering |
+| `wayland-egl`, `egl`, `gl` | Hardware GLSL Liquid Glass shaders |
+| `dbus-1` | System tray / D-Bus integration |
+| [Niri](https://github.com/YaLTeR/niri) | Wayland compositor (recommended) |
+| NetworkManager (`nmcli`) | Wi-Fi status & switching |
+| WirePlumber (`wpctl`) | Audio volume & output sinks |
+| BlueZ (`bluetoothctl`) | Bluetooth devices |
+| `brightnessctl`, `playerctl`, `powerprofilesctl` | Display brightness, media, power profiles |
 
-## Build & Run
+## Live Preview (Try Without Installing)
+
+You can try Mistbar live without downloading or installing anything permanently:
 
 ```bash
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build -j
-ctest --test-dir build --output-on-failure
-```
+# One-liner remote preview:
+curl -sSL https://raw.githubusercontent.com/TattvaOrg/Mistbar/main/view.sh | bash
 
-Preview without installing:
-
-```bash
+# Or from local clone:
 ./view.sh
 ```
 
-Install system-wide to `~/.local`:
+Press `Ctrl+C` at any time to close the preview and clean up.
+
+## Installation & Updates
+
+### Quick Install (Recommended)
+
+Run this one-liner in your terminal to install Mistbar directly:
 
 ```bash
-./install.sh --local
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/TattvaOrg/Mistbar/main/install.sh)"
 ```
 
-## CLI Usage
+The installer will:
+- Install Mistbar into `~/.mistbar`
+- Prompt you to select your installation channel:
+  - **1) Latest Release** *(Recommended - stable releases)*
+  - **2) Main Branch** *(Bleeding edge - latest features)*
+- Compile with CMake and install binaries (`mistbar-daemon`, `mistbar-settings`) into `~/.local/bin`
+- Symlink `mistbar` CLI into `~/.local/bin/mistbar`
+- Configure Wayland blur rules and autostart
+
+### Updating Mistbar
+
+If Mistbar is already installed, update anytime with:
 
 ```bash
-mistbar                  # Open Mistbar Settings desktop app
-mistbar start            # Start the top bar daemon
-mistbar stop             # Stop the top bar daemon
-mistbar restart          # Restart the top bar daemon
-mistbar status           # Show daemon & GPU glass status
-mistbar toggle           # Toggle intelligent auto-hide
-mistbar theme dark|light # Switch theme mode
-mistbar preset regular|frosted|dark|clear|solid
-mistbar look pill|attached
+mistbar update
+# or one-liner:
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/TattvaOrg/Mistbar/main/update.sh)"
 ```
+
+*(Or simply re-run the one-liner installer above).* The updater automatically detects your existing installation in `~/.mistbar`, prompts for release or main branch (defaulting to the latest release), rebuilds, and restarts your active bar smoothly.
+
+### Manual Installation (From Local Clone)
+
+```bash
+git clone https://github.com/TattvaOrg/Mistbar.git
+cd Mistbar
+./install.sh
+```
+
+### System Dependencies
+
+```bash
+# On Arch Linux / CachyOS:
+mistbar install-deps
+```
+
+## Uninstallation
+
+To remove Mistbar, run:
+
+```bash
+mistbar uninstall
+# or:
+~/.mistbar/uninstall.sh
+# or one-liner:
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/TattvaOrg/Mistbar/main/uninstall.sh)"
+```
+
+The uninstaller stops running Mistbar processes, removes binaries, CLI symlinks, desktop entries, and compositor autostart/blur rules, and optionally prompts whether to delete the `~/.mistbar` installation and `~/.config/mistbar` configuration directories.
+
+## Usage
+
+```bash
+mistbar                   # Open Mistbar Settings desktop app
+mistbar settings [page]   # Open a specific Settings page (appearance, liquid-glass, menubar, wifi, ...)
+mistbar start             # Start the bar daemon
+mistbar stop              # Stop the bar daemon
+mistbar restart           # Restart the bar daemon
+mistbar update            # Update Mistbar to latest release or main
+mistbar uninstall         # Uninstall Mistbar from system
+mistbar tuner             # Open the live Liquid Glass Shader Tuner popover
+mistbar spotlight         # Open the built-in Liquid Glass Spotlight search pill
+mistbar toggle            # Toggle bar visibility / intelligent auto-hide
+mistbar show              # Show the bar (always visible)
+mistbar hide              # Hide the bar completely
+mistbar auto-hide on      # Enable intelligent auto-hide (or mistbar --auto-hide)
+mistbar auto-hide off     # Disable auto-hide (or mistbar --always-visible)
+mistbar auto-hide toggle  # Toggle auto-hide state
+mistbar preset regular    # Switch Liquid Glass preset (regular, frosted, dark, clear, solid)
+mistbar look attached     # Switch to Edge-to-Edge Transparent Top Bar (default)
+mistbar look pill         # Switch to Floating Rounded Pill capsule
+mistbar theme dark        # Apply dark/black theme
+mistbar status            # Check daemon and GPU glass status
+mistbar config            # View or edit ~/.config/mistbar/config.json
+mistbar build             # Build Mistbar locally with CMake
+mistbar install-deps      # Install system dependencies
+mistbar --help            # Show all commands and options
+mistbar --version         # Show version
+```
+
+## Configuration & Themes
+
+Mistbar can be customized live via `mistbar-settings`, the bar Shader Tuner, or by editing `~/.config/mistbar/config.json` (via `mistbar config`):
+
+```json
+{
+  "theme": "dark",
+  "glassPreset": "regular",
+  "look": "attached",
+  "iconStyle": "default",
+  "accentColor": "#0A84FF",
+  "autoHide": false,
+  "barHeight": 26,
+  "barMargin": 6,
+  "borderRadius": 14,
+  "blurRadius": 20,
+  "refractionStrength": 0.45,
+  "bezelThickness": 0.35,
+  "chromaticAberration": 0.25,
+  "specularIntensity": 0.55,
+  "tintOpacity": 0.14,
+  "glassOpacity": 0.85,
+  "showAppMenu": true,
+  "showWorkspaces": false,
+  "showBattery": true,
+  "showNetwork": true,
+  "showBluetooth": false,
+  "showVolume": false,
+  "showSpotlight": true,
+  "showControlCenter": true
+}
+```
+
+- **Dynamic Look & Shape**: Switch between edge-to-edge transparent bar and floating capsule on-the-fly (`mistbar look attached` and `mistbar look pill`).
+- **Dynamic Background Presets**: Switch between `regular`, `frosted`, `dark`, `clear`, and `solid` (`mistbar preset <name>`).
+- **Real-Time Shader Tuning**: Tune refraction, dispersion, frost blur, specular shine, and tint opacity live via `mistbar tuner` or Mistbar Settings.

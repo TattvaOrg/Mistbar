@@ -69,17 +69,19 @@ print_help() {
     echo -e "    ${GREEN}stop${NC}                     Stop the top bar daemon"
     echo -e "    ${GREEN}restart${NC}                  Restart the top bar daemon"
     echo -e "    ${GREEN}status${NC}                   Show daemon and shader status"
+    echo -e "    ${GREEN}tuner${NC}                    Open the live Liquid Glass Shader Tuner"
+    echo -e "    ${GREEN}spotlight${NC}                Open the Liquid Glass Spotlight search pill"
     echo -e "    ${GREEN}toggle${NC}                   Toggle intelligent auto-hide"
     echo -e "    ${GREEN}show${NC}                     Show bar (always visible)"
     echo -e "    ${GREEN}hide${NC}                     Hide bar completely"
     echo -e "    ${GREEN}auto-hide <on|off|toggle>${NC} Configure intelligent auto-hide"
-    echo -e "    ${GREEN}theme <dark|light>${NC}       Switch dark or light theme"
+    echo -e "    ${GREEN}theme <dark|light>${NC}       Switch theme"
     echo -e "    ${GREEN}preset <regular|frosted|dark|clear|solid>${NC} Switch Liquid Glass preset"
-    echo -e "    ${GREEN}look <pill|attached>${NC}     Switch bar geometry"
+    echo -e "    ${GREEN}look <attached|pill>${NC}     Switch bar geometry"
     echo -e "    ${GREEN}config${NC}                   Print or edit config.json"
     echo -e "    ${GREEN}build${NC}                    Build Mistbar with CMake"
     echo -e "    ${GREEN}install-deps${NC}             Install required system dependencies"
-    echo -e "    ${GREEN}update${NC}                   Update Mistbar"
+    echo -e "    ${GREEN}update${NC}                   Update Mistbar to latest release or main"
     echo -e "    ${GREEN}uninstall${NC}                Uninstall Mistbar"
     echo -e "    ${GREEN}-h, --help${NC}               Show this help"
     echo -e "    ${GREEN}-v, --version${NC}            Show version"
@@ -264,11 +266,26 @@ case "${1:-}" in
         ;;
     update)
         shift
-        exec bash "$SCRIPT_DIR/install.sh" "$@"
+        if [ -f "$SCRIPT_DIR/update.sh" ]; then
+            exec bash "$SCRIPT_DIR/update.sh" "$@"
+        elif [ -f "$SCRIPT_DIR/install.sh" ]; then
+            exec bash "$SCRIPT_DIR/install.sh" "$@"
+        elif [ -f "$HOME/.mistbar/update.sh" ]; then
+            exec bash "$HOME/.mistbar/update.sh" "$@"
+        else
+            exec bash -c "$(curl -fsSL https://raw.githubusercontent.com/TattvaOrg/Mistbar/main/update.sh)" -- "$@"
+        fi
         ;;
     uninstall)
         shift
-        exec bash "$SCRIPT_DIR/uninstall.sh" "$@"
+        if [ -f "$SCRIPT_DIR/uninstall.sh" ]; then
+            exec bash "$SCRIPT_DIR/uninstall.sh" "$@"
+        elif [ -f "$HOME/.mistbar/uninstall.sh" ]; then
+            exec bash "$HOME/.mistbar/uninstall.sh" "$@"
+        else
+            echo -e "${RED}Error: Uninstall script not found.${NC}"
+            exit 1
+        fi
         ;;
     -v|--version)
         echo "Mistbar v0.3.0"
