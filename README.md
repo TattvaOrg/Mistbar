@@ -110,6 +110,8 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/TattvaOrg/Mistbar/main/u
 
 The uninstaller stops running Mistbar processes, removes binaries, CLI symlinks, desktop entries, and compositor autostart/blur rules, and optionally prompts whether to delete the `~/.mistbar` installation and `~/.config/mistbar` configuration directories.
 
+<!-- 
+
 ## Usage
 
 ```bash
@@ -176,3 +178,5 @@ Mistbar can be customized live via `mistbar-settings`, the bar Shader Tuner, or 
 - **Dynamic Look & Shape**: Switch between edge-to-edge transparent bar and floating capsule on-the-fly (`mistbar look attached` and `mistbar look pill`).
 - **Dynamic Background Presets**: Switch between `regular`, `frosted`, `dark`, `clear`, and `solid` (`mistbar preset <name>`).
 - **Real-Time Shader Tuning**: Tune refraction, dispersion, frost blur, specular shine, and tint opacity live via `mistbar tuner` or Mistbar Settings.
+
+-->
